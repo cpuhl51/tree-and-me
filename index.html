@@ -42,12 +42,22 @@
   .big { font-size:28px; font-weight:700; color:var(--green); }
   .small { font-size:12px; color:var(--quiet); }
   img.thumb { max-width:100%; border-radius:10px; margin-top:8px; }
+  .grid a, .meta a { color:var(--green); }
+  #btnMe { padding:0; width:34px; height:34px; border-radius:50%; overflow:hidden; font-weight:700; font-size:15px; }
+  #btnMe img { width:100%; height:100%; object-fit:cover; display:block; }
+  .av { width:96px; height:96px; border-radius:50%; background:var(--green2); color:var(--green); display:flex; align-items:center; justify-content:center; font-size:40px; font-weight:700; overflow:hidden; margin:12px 0; }
+  .av img { width:100%; height:100%; object-fit:cover; }
+  input.txt { width:100%; padding:12px; font-size:16px; border:1px solid var(--line); border-radius:10px; }
+  .chk { display:flex; gap:8px; align-items:flex-start; font-size:14px; margin:10px 0; }
+  .chk input { margin-top:3px; }
+  .gallery { border:1px dashed var(--line); border-radius:10px; padding:10px; font-size:13px; color:var(--quiet); margin-top:10px; }
 </style>
 </head>
 <body>
 <header>
   <h1>🌳 Tree and me</h1>
   <span id="pts">0 P</span>
+  <button id="btnMe" title="Profil">?</button>
   <button id="btnStats">Statistik</button>
 </header>
 <div id="map"></div>
@@ -61,6 +71,8 @@
 <div id="toast"></div>
 <div id="busy" class="hidden">Bitte warten …</div>
 <input type="file" id="camInput" accept="image/*" capture="environment" hidden>
+<input type="file" id="avInput" accept="image/*" hidden>
+<div id="profile" class="panel hidden"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -72,7 +84,9 @@ const CFG = {
   minZoom: 16,         // ab dieser Zoomstufe werden Bäume geladen
   maxFeatures: 1500,
   wfs: 'https://data.wien.gv.at/daten/geo', // später ggf. eigener Server/Worker
-  reportWorkdays: 3
+  reportWorkdays: 3,
+  ma42Mail: 'post@ma42.wien.gv.at',
+  sagsWienPkg: 'at.gv.wien.sagswien.app.droid'
 };
 
 // ---------- Speicher ----------
@@ -223,6 +237,7 @@ function openTree(t) {
     <h2>${EMOJI[kat]} ${esc(p.GATTUNG_ART || 'Unbekannte Art')}</h2>
     <div class="meta">${KAT_NAME[kat]} · ${esc(p.OBJEKT_STRASSE)} · ${esc(p.BEZIRK)}. Bezirk</div>
     <div class="grid">
+      <b>Gattung</b><span><a href="${wikiUrl(p.GATTUNG_ART)}" target="_blank" rel="noopener">${esc(genusOf(p.GATTUNG_ART))} auf Wikipedia</a></span>
       <b>Baumnummer</b><span>${esc(p.BAUMNUMMER)}</span>
       <b>Pflanzjahr</b><span>${esc(p.PFLANZJAHR_TXT ?? p.PFLANZJAHR)}</span>
       <b>Stammumfang</b><span>${esc(p.STAMMUMFANG_TXT ?? p.STAMMUMFANG)}</span>
@@ -232,31 +247,37 @@ function openTree(t) {
     </div>`;
   if (v) {
     html += `<div class="ok">✔ Besucht am ${fmtDate(v.ts)} · ${v.points} Punkte${v.pending ? ` (vorläufig bis ${fmtDate(v.pendingUntil)})` : ''}</div>
-      <button class="btn sec" onclick="startCam('selfie')">🤳 Foto mit dem Baum ${v.selfie ? 'ersetzen' : 'machen'}</button>
-      <button class="btn ghost" disabled>✉️ Nachricht für den nächsten Besucher (kommt mit dem Server)</button>
-      <div id="selfiePrev"></div>`;
-    if (v.selfie) getPhoto('selfie:' + t.key).then(b => { if (b && $('selfiePrev')) $('selfiePrev').innerHTML = `<img class="thumb" src="${URL.createObjectURL(b)}">`; });
+      <button class="btn sec" onclick="startCam('selfie')">🤳 Selfie mit dem Baum (für dich / dein Profil)</button>
+      <button class="btn sec" onclick="startCam('tree')">📷 Foto nur vom Baum (Baum-Doku)</button>
+      <div id="photoList">${(v.photos || []).length ? '' : '<div class="small" style="margin-top:8px">Noch keine Fotos.</div>'}</div>
+      <button class="btn ghost" disabled>✉️ Nachricht für den nächsten Besucher (kommt mit dem Server)</button>`;
+    renderPhotoList(v);
   } else {
     const ok = inRange(t);
     if (!ok) html += `<div class="warn">Geh näher hin (max. ${CFG.radius} m), um den Baum zu scannen.</div>`;
     html += `<button class="btn" ${ok ? '' : 'disabled'} onclick="startCam('ocr')">📷 Plakette scannen</button>
       <button class="btn sec" ${ok ? '' : 'disabled'} onclick="planB()">Plakette geht nicht</button>`;
   }
+  html += `<div class="gallery">📷 Fotos anderer Spieler von diesem Baum – kommen mit dem Server.</div>
+    <button class="btn sec" onclick="reportTree()">⚠️ Problem an die Wiener Stadtgärten melden</button>
+    <button class="btn ghost" onclick="mailReport(reportData(selected))">… lieber per Mail</button>`;
   $('sheet').innerHTML = html;
   $('sheet').classList.remove('hidden');
 }
 
 // ---------- Kamera ----------
 let camMode = null, planBReason = null, lastPhoto = null;
-function startCam(mode) { camMode = mode; $('camInput').value = ''; $('camInput').click(); }
+function startCam(mode) { camMode = mode; const c = $('camInput'); c.value = ''; c.setAttribute('capture', mode === 'selfie' ? 'user' : 'environment'); c.click(); }
 $('camInput').onchange = async e => {
   const file = e.target.files && e.target.files[0];
   if (!file || !selected) return;
   const t = selected;
-  if (camMode === 'selfie') {
-    const blob = await shrink(file, 1600);
-    await putPhoto('selfie:' + t.key, blob);
-    state.visits[t.key].selfie = true; saveState(); openTree(t); toast('Foto gespeichert');
+  if (camMode === 'selfie' || camMode === 'tree') {
+    const blob = await shrink(file, 1600), v = state.visits[t.key], ts = new Date().toISOString();
+    const id = `${camMode}:${t.key}:${ts}`;
+    await putPhoto(id, blob);
+    (v.photos = v.photos || []).unshift({ id, kind: camMode, ts, public: false });
+    saveState(); openTree(t); toast('Foto gespeichert – „In Cloud speichern“ für ein Backup');
     return;
   }
   if (camMode === 'planb') {
@@ -331,7 +352,7 @@ function planB(reusePhoto) {
   const t = selected;
   $('sheet').innerHTML = `<button class="close" onclick="openTree(selected)">×</button>
     <h2>Was ist mit der Plakette?</h2>
-    <div class="meta">Ein Foto des Baums ist Pflicht.</div>
+    <div class="meta">Ein Foto des Baumes oder der Plakette ist Pflicht, da eine Meldung des Problems automatisch an die Wiener Gärten gesendet wird.</div>
     <button class="btn sec" onclick="chooseReason('fehlt', ${!!reusePhoto})">Plakette fehlt</button>
     <button class="btn sec" onclick="chooseReason('unlesbar', ${!!reusePhoto})">Plakette nicht lesbar</button>
     <button class="btn sec" onclick="chooseReason('zu_hoch', ${!!reusePhoto})">Plakette zu hoch</button>`;
@@ -414,7 +435,151 @@ async function importData(file) {
   } catch (e) { toast('Import fehlgeschlagen: ' + e.message); }
 }
 
+// ---------- Wikipedia ----------
+function wikiUrl(art) { return 'https://de.wikipedia.org/wiki/' + encodeURIComponent(genusOf(art)); }
+
+// ---------- Fotos in die Cloud (über das Teilen-Menü) ----------
+const PHOTO_KIND = {
+  selfie: { label: '🤳 Selfie', consent: 'Auf meiner Profilseite für andere Spieler zeigen' },
+  tree:   { label: '📷 Baum-Doku', consent: 'In der Baum-Doku für andere Spieler zeigen' }
+};
+async function renderPhotoList(v) {
+  const box = $('photoList'); if (!box || !(v.photos || []).length) return;
+  let html = '';
+  for (const ph of v.photos) {
+    const b = await getPhoto(ph.id);
+    html += `<div style="margin-top:12px">
+      <div class="small">${PHOTO_KIND[ph.kind].label} · ${fmtDate(ph.ts)}</div>
+      ${b ? `<img class="thumb" src="${URL.createObjectURL(b)}" alt="">` : ''}
+      <button class="btn sec" onclick="saveToCloud('${esc(ph.id)}')">☁️ In Cloud speichern (z. B. OneDrive)</button>
+      <label class="chk"><input type="checkbox" ${ph.public ? 'checked' : ''} onchange="setPublic('${esc(ph.id)}', this.checked)"> ${PHOTO_KIND[ph.kind].consent} (Upload, sobald es den Server gibt)</label>
+      <button class="btn ghost" onclick="deletePhoto('${esc(ph.id)}')">Foto löschen</button></div>`;
+  }
+  if ($('photoList')) $('photoList').innerHTML = html;
+}
+function findPhoto(id) {
+  for (const v of Object.values(state.visits)) { const ph = (v.photos || []).find(x => x.id === id); if (ph) return { v, ph }; }
+  return {};
+}
+async function saveToCloud(id) {
+  const { v, ph } = findPhoto(id); if (!ph) return;
+  const blob = await getPhoto(id); if (!blob) return toast('Kein Foto gefunden');
+  const name = `tree-and-me_${ph.ts.slice(0, 10)}_${ph.kind === 'selfie' ? 'selfie' : 'baum'}_${v.bezirk}-bezirk_nr-${normNum(v.nummer)}.jpg`;
+  const file = new File([blob], name, { type: 'image/jpeg' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: 'Tree and me' }); } catch (e) { /* abgebrochen */ }
+  } else {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; a.click();
+    toast('Foto heruntergeladen');
+  }
+}
+function setPublic(id, on) {
+  const { ph } = findPhoto(id); if (!ph) return;
+  ph.public = on; saveState();
+  toast(on ? 'Danke! Wird hochgeladen, sobald es den Server gibt.' : 'Foto bleibt privat');
+}
+async function deletePhoto(id) {
+  const { v } = findPhoto(id); if (!v || !confirm('Foto wirklich löschen?')) return;
+  v.photos = v.photos.filter(x => x.id !== id); saveState();
+  const db = await idb(); db.transaction('photos', 'readwrite').objectStore('photos').delete(id);
+  if (selected) openTree(selected);
+}
+// alte Selfies (v0.3) ins neue Format übernehmen
+for (const v of Object.values(state.visits)) {
+  if (v.selfie && !v.photos) { v.photos = [{ id: 'selfie:' + v.key, kind: 'selfie', ts: v.ts, public: !!v.selfiePublic }]; }
+  delete v.selfie; delete v.selfiePublic;
+}
+localStorage.setItem(STORE_KEY, JSON.stringify(state));
+
+// ---------- Meldung an die Wiener Stadtgärten ----------
+function reportData(t) { return { props: t.props, lat: t.latlng.lat, lng: t.latlng.lng }; }
+function reportText(r) {
+  const p = r.props, lat = r.lat.toFixed(6), lng = r.lng.toFixed(6);
+  return `Baum: ${p.GATTUNG_ART}\nBaumnummer: ${p.BAUMNUMMER}\nOrt: ${p.OBJEKT_STRASSE}, ${p.BEZIRK}. Bezirk\nKoordinaten: ${lat}, ${lng}\nKarte: https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=19/${lat}/${lng}\n\nBeschreibung des Problems:\n\n\n(Foto bitte anhängen)\n\nGemeldet über die App „Tree and me“`;
+}
+function mailReport(r) {
+  const p = r.props;
+  const subject = `Meldung zu Baum Nr. ${p.BAUMNUMMER}, ${p.OBJEKT_STRASSE} (${p.BEZIRK}. Bezirk)`;
+  location.href = `mailto:${CFG.ma42Mail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(reportText(r))}`;
+}
+async function reportTree() {
+  const t = selected; if (!t) return;
+  const r = reportData(t);
+  if (!/Android/i.test(navigator.userAgent)) return mailReport(r);
+  // Android: Sag's Wien öffnen; ist die App nicht installiert, kommt Chrome zurück auf diese Seite (?meldung=1)
+  localStorage.setItem('tam_report', JSON.stringify(r));
+  try { await navigator.clipboard.writeText(reportText(r)); toast('Baumdaten kopiert – in Sag\'s Wien einfügen', 4000); } catch (e) {}
+  const back = location.origin + location.pathname + '?meldung=1';
+  setTimeout(() => {
+    location.href = `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${CFG.sagsWienPkg};S.browser_fallback_url=${encodeURIComponent(back)};end`;
+  }, 600);
+}
+function checkReturnedReport() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has('meldung')) return;
+  history.replaceState(null, '', location.pathname);
+  let r = null; try { r = JSON.parse(localStorage.getItem('tam_report')); } catch (e) {}
+  if (!r) return;
+  $('sheet').innerHTML = `<button class="close" onclick="closeSheet()">×</button>
+    <h2>Sag's Wien ist nicht installiert</h2>
+    <div class="meta">Meldung zu Baum Nr. ${esc(r.props.BAUMNUMMER)}, ${esc(r.props.OBJEKT_STRASSE)}</div>
+    <button class="btn" id="btnMailNow">📧 Per Mail an die Stadtgärten melden</button>
+    <a class="btn sec" style="text-align:center;text-decoration:none" href="https://play.google.com/store/apps/details?id=${CFG.sagsWienPkg}" target="_blank" rel="noopener">Sag's Wien installieren</a>`;
+  $('btnMailNow').onclick = () => mailReport(r);
+  $('sheet').classList.remove('hidden');
+}
+
+// ---------- Profil ----------
+async function avatarHtml(cls) {
+  const pr = state.profile || {};
+  if (pr.hasAvatar) { const b = await getPhoto('avatar'); if (b) return `<img src="${URL.createObjectURL(b)}" alt="">`; }
+  return esc((pr.name || '?').slice(0, 1).toUpperCase());
+}
+async function renderMe() { $('btnMe').innerHTML = await avatarHtml(); }
+async function openProfile(first) {
+  const pr = state.profile || {};
+  $('profile').innerHTML = `${first ? '' : `<button class="close" onclick="$('profile').classList.add('hidden')">×</button>`}
+    <h2>${first ? 'Willkommen bei Tree and me!' : 'Dein Profil'}</h2>
+    <div class="meta">Dein Name erscheint später in der Wiener Rangliste. Bitte keinen echten vollen Namen verwenden.</div>
+    <div class="av" id="avPrev">${await avatarHtml()}</div>
+    <button class="btn sec" onclick="$('avInput').value='';$('avInput').click()">🖼️ Avatarbild wählen (optional)</button>
+    <p><b>Spielername</b></p>
+    <input class="txt" id="nameIn" maxlength="20" placeholder="z. B. Baumfreund22" value="${esc(pr.name || '')}">
+    <div class="small">3–20 Zeichen: Buchstaben, Ziffern, _ und -</div>
+    <button class="btn" onclick="saveProfile()">Speichern</button>
+    ${first ? '' : '<h3>Meine Selfies</h3><div id="mySelfies" class="small">Noch keine Selfies.</div>'}`;
+  $('profile').classList.remove('hidden');
+  if (!first) {
+    const list = Object.values(state.visits).flatMap(v => (v.photos || []).filter(p => p.kind === 'selfie').map(p => ({ v, p })));
+    if (list.length) {
+      let h = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+      for (const { v, p } of list) { const b = await getPhoto(p.id); if (b) h += `<div><img class="thumb" src="${URL.createObjectURL(b)}" alt=""><div class="small">${esc(v.gattung)} · ${fmtDate(p.ts)}</div></div>`; }
+      $('mySelfies').innerHTML = h + '</div>';
+    }
+  }
+}
+function saveProfile() {
+  const n = $('nameIn').value.trim();
+  if (!/^[\p{L}\p{N}_-]{3,20}$/u.test(n)) return toast('Bitte 3–20 Zeichen: Buchstaben, Ziffern, _ oder -');
+  state.profile = Object.assign(state.profile || {}, { name: n, id: (state.profile && state.profile.id) || crypto.randomUUID() });
+  saveState(); renderMe(); $('profile').classList.add('hidden'); toast('Hallo ' + n + '!');
+}
+$('avInput').onchange = async e => {
+  const f = e.target.files && e.target.files[0]; if (!f) return;
+  const img = await createImageBitmap(f), side = Math.min(img.width, img.height);
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  c.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 256, 256);
+  const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+  await putPhoto('avatar', blob);
+  state.profile = Object.assign(state.profile || {}, { hasAvatar: true }); saveState();
+  $('avPrev').innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="">`; renderMe();
+};
+$('btnMe').onclick = () => openProfile(false);
+
 renderPoints();
+renderMe();
+checkReturnedReport();
+if (!state.profile || !state.profile.name) openProfile(true);
 </script>
 </body>
 </html>
