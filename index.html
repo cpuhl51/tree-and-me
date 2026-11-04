@@ -50,6 +50,17 @@
   input.txt { width:100%; padding:12px; font-size:16px; border:1px solid var(--line); border-radius:10px; }
   .chk { display:flex; gap:8px; align-items:flex-start; font-size:14px; margin:10px 0; }
   .chk input { margin-top:3px; }
+  #filter { position:fixed; top:60px; left:12px; z-index:900; display:flex; background:#fff; border:1px solid var(--line); border-radius:20px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.15); }
+  #filter button { border:0; background:none; padding:8px 12px; font-size:13px; color:var(--quiet); }
+  #filter button.on { background:var(--green); color:#fff; font-weight:600; }
+  #hint { top:104px !important; }
+  .heart-ic { background:none; border:0; filter:drop-shadow(0 1px 1px rgba(0,0,0,.35)); }
+  .vlist button { display:block; width:100%; text-align:left; background:none; border:0; border-bottom:1px solid var(--line); padding:10px 4px; font-size:14px; color:var(--ink); }
+  .vlist .small { display:block; }
+  #cropper { position:fixed; inset:0; z-index:1500; background:#111; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:16px; }
+  #cropBox { width:280px; height:280px; border-radius:50%; overflow:hidden; touch-action:none; box-shadow:0 0 0 3px #fff; }
+  #cropper input[type=range] { width:280px; }
+  #cropper .row { display:flex; gap:10px; width:280px; }
   .gallery { border:1px dashed var(--line); border-radius:10px; padding:10px; font-size:13px; color:var(--quiet); margin-top:10px; }
 </style>
 </head>
@@ -62,6 +73,9 @@
 </header>
 <div id="map"></div>
 <div id="hint"></div>
+<div id="filter">
+  <button data-m="all" class="on">Alle</button><button data-m="open">Offen</button><button data-m="visited">Besucht</button>
+</div>
 <div id="fab">
   <label><input type="checkbox" id="testMode"> Testmodus</label>
   <button id="btnLocate">◎ Mein Standort</button>
@@ -73,9 +87,16 @@
 <input type="file" id="camInput" accept="image/*" capture="environment" hidden>
 <input type="file" id="avInput" accept="image/*" hidden>
 <div id="profile" class="panel hidden"></div>
+<div id="cropper" class="hidden">
+  <div style="color:#fff;font-size:15px">Bild verschieben und zoomen</div>
+  <div id="cropBox"><canvas id="cropCv" width="560" height="560" style="width:280px;height:280px"></canvas></div>
+  <input type="range" id="cropZoom" min="1" max="4" step="0.01" value="1">
+  <div class="row"><button class="btn ghost" style="color:#ccc" id="cropCancel">Abbrechen</button><button class="btn" id="cropOk">Übernehmen</button></div>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async></script>
 <script>
 // ---------- Einstellungen ----------
 const CFG = {
@@ -86,7 +107,8 @@ const CFG = {
   wfs: 'https://data.wien.gv.at/daten/geo', // später ggf. eigener Server/Worker
   reportWorkdays: 3,
   ma42Mail: 'post@ma42.wien.gv.at',
-  sagsWienPkg: 'at.gv.wien.sagswien.app.droid'
+  sagsWienPkg: 'at.gv.wien.sagswien.app.droid',
+  googleClientId: '' // aus der Google Cloud Console (Google Auth Platform → Clients) eintragen
 };
 
 // ---------- Speicher ----------
@@ -161,15 +183,56 @@ let me = null, meMarker = null, accCircle = null, selected = null;
 function treeKey(p) { return `${p.BEZIRK}|${p.OBJEKT_STRASSE}|${p.BAUMNUMMER}`; }
 
 function iconFor(t) {
-  const kat = category(t.props.GATTUNG_ART);
-  const visited = !!state.visits[t.key];
-  return L.divIcon({ className: `tree-ic ${visited ? 'visited' : ''}`, html: EMOJI[kat], iconSize: [30, 30] });
+  return L.divIcon({ className: 'tree-ic', html: EMOJI[category(t.props.GATTUNG_ART)], iconSize: [30, 30] });
 }
+const HEART = c => `<svg viewBox="0 0 32 32" width="30" height="30"><path d="M16 28C7 21 2 16 2 10.5 2 6.4 5.2 3.5 9 3.5c2.8 0 5.2 1.6 7 4 1.8-2.4 4.2-4 7-4 3.8 0 7 2.9 7 7 0 5.5-5 10.5-14 17.5z" fill="${c}" stroke="#fff" stroke-width="2"/></svg>`;
+const CORE = `<svg viewBox="0 0 32 32" width="30" height="30"><path d="M16 5c0-2 1-3 3-3.5" stroke="#6b4a2b" stroke-width="2" fill="none"/><path d="M19 4.5c2-2 4.5-1.5 5.5-.5-1.5 1.5-3.5 2-5.5.5z" fill="#4caf50"/><path d="M7 8c2-3 6-3.5 9-3.5S23 5 25 8c-3 1-4.5 3.5-4.5 8s1.5 7 4.5 8c-2 3-6 4-9 4s-7-1-9-4c3-1 4.5-3.5 4.5-8S10 9 7 8z" fill="#f6ecc4" stroke="#fff" stroke-width="1.5"/><path d="M7 8c2-3 6-3.5 9-3.5S23 5 25 8c-3 .8-6 1.2-9 1.2S10 8.8 7 8z" fill="#d93a2b"/><path d="M7 24c3-.8 6-1.2 9-1.2s6 .4 9 1.2c-2 3-6 4-9 4s-7-1-9-4z" fill="#d93a2b"/><ellipse cx="14" cy="16" rx="1.2" ry="2" fill="#5b3a1e"/><ellipse cx="18" cy="16" rx="1.2" ry="2" fill="#5b3a1e"/></svg>`;
+function visitedIcon(kat) {
+  const html = kat === 'obst' ? CORE : HEART(kat === 'nadel' ? '#1f5e2c' : '#7ccf5a');
+  return L.divIcon({ className: 'heart-ic', html, iconSize: [30, 30] });
+}
+const openLayer = L.layerGroup().addTo(map), visitedLayer = L.layerGroup().addTo(map);
+const visitedMarkers = new Map();
+let mode = 'all';
+function treeFromVisit(v) {
+  return trees.get(v.key) || { key: v.key, latlng: L.latLng(v.lat, v.lon),
+    props: v.props || { BAUMNUMMER: v.nummer, GATTUNG_ART: v.art, BEZIRK: v.bezirk, OBJEKT_STRASSE: v.strasse } };
+}
+function onTreeClick(t) {
+  if ($('testMode').checked) { selected = t; setMe(t.latlng, 5); } // Testmodus: Standort = dieser Baum
+  openTree(t);
+}
+function refreshMarkers() {
+  // besuchte Bäume: immer vorhanden, unabhängig vom Zoom
+  for (const [k, m] of visitedMarkers) if (!state.visits[k]) { visitedLayer.removeLayer(m); visitedMarkers.delete(k); }
+  for (const v of Object.values(state.visits)) {
+    if (visitedMarkers.has(v.key)) continue;
+    const m = L.marker([v.lat, v.lon], { icon: visitedIcon(v.kat || category(v.art)), zIndexOffset: 500 })
+      .on('click', () => onTreeClick(treeFromVisit(v)));
+    visitedLayer.addLayer(m); visitedMarkers.set(v.key, m);
+  }
+  // offene Bäume
+  for (const t of trees.values()) {
+    const show = !state.visits[t.key];
+    if (show && !openLayer.hasLayer(t.marker)) openLayer.addLayer(t.marker);
+    if (!show && openLayer.hasLayer(t.marker)) openLayer.removeLayer(t.marker);
+  }
+  map[mode === 'open' ? 'removeLayer' : 'addLayer'](visitedLayer);
+  map[mode === 'visited' ? 'removeLayer' : 'addLayer'](openLayer);
+}
+document.querySelectorAll('#filter button').forEach(b => b.onclick = () => {
+  mode = b.dataset.m;
+  document.querySelectorAll('#filter button').forEach(x => x.classList.toggle('on', x === b));
+  refreshMarkers();
+  if (mode === 'visited') { showHint(Object.keys(state.visits).length ? '' : 'Noch keine besuchten Bäume'); }
+  else loadTrees();
+});
 
 let loadTimer = null, loading = false;
 map.on('moveend', () => { clearTimeout(loadTimer); loadTimer = setTimeout(loadTrees, 400); });
 
 async function loadTrees() {
+  if (mode === 'visited') return;
   if (map.getZoom() < CFG.minZoom) { showHint('Näher hineinzoomen, um Bäume zu sehen'); return; }
   showHint('');
   if (loading) return; loading = true;
@@ -186,12 +249,10 @@ async function loadTrees() {
       const key = treeKey(p);
       if (trees.has(key)) continue;
       const t = { key, props: p, latlng: L.latLng(c[1], c[0]) };
-      t.marker = L.marker(t.latlng, { icon: iconFor(t) }).addTo(map).on('click', () => {
-        if ($('testMode').checked) { selected = t; setMe(t.latlng, 5); } // Testmodus: Standort = dieser Baum
-        openTree(t);
-      });
+      t.marker = L.marker(t.latlng, { icon: iconFor(t) }).on('click', () => onTreeClick(t));
       trees.set(key, t);
     }
+    refreshMarkers();
     if ((gj.features || []).length >= CFG.maxFeatures) showHint('Sehr viele Bäume – näher zoomen für alle');
   } catch (e) {
     console.error(e);
@@ -381,11 +442,11 @@ async function recordVisit(t, method, reason, photo) {
     key: t.key, nummer: p.BAUMNUMMER, art: p.GATTUNG_ART, gattung: genusOf(p.GATTUNG_ART), kat: category(p.GATTUNG_ART),
     bezirk: bez, strasse: p.OBJEKT_STRASSE, lat: t.latlng.lat, lon: t.latlng.lng, ts: now.toISOString(),
     method, reason, points: pts, pending: report, pendingUntil: report ? addWorkdays(now, CFG.reportWorkdays).toISOString() : null,
-    reportQueued: report, selfie: false
+    reportQueued: report, props: p
   };
   if (photo) await putPhoto('scan:' + t.key, photo);
   saveState();
-  t.marker.setIcon(iconFor(t));
+  refreshMarkers();
   selected = t; openTree(t);
   toast('🎉 ' + why.join(' · ') + (report ? ' – Meldung an die Stadtgärten vorgemerkt' : ''), 4000);
 }
@@ -418,7 +479,7 @@ $('btnStats').onclick = () => {
     <button class="btn sec" onclick="exportData()">Besuche exportieren (JSON)</button>
     <button class="btn sec" onclick="$('importFile').click()">Besuche importieren</button>
     <input type="file" id="importFile" accept="application/json" hidden onchange="importData(this.files[0])">
-    <p class="small">Fotos bleiben vorerst nur auf diesem Gerät. Baumdaten: Stadt Wien – data.wien.gv.at (CC BY 4.0). Karte © OpenStreetMap.</p>`;
+    <p class="small"><a href="datenschutz.html">Datenschutz</a> · Fotos bleiben vorerst nur auf diesem Gerät. Baumdaten: Stadt Wien – data.wien.gv.at (CC BY 4.0). Karte © OpenStreetMap.</p>`;
   p.classList.remove('hidden');
 };
 function exportData() {
@@ -430,7 +491,7 @@ async function importData(file) {
   try {
     const s = JSON.parse(await file.text());
     if (!s.visits) throw new Error('Keine Besuche gefunden');
-    state = s; saveState(); trees.forEach(t => t.marker.setIcon(iconFor(t)));
+    state = s; saveState(); refreshMarkers();
     toast('Import erfolgreich'); $('stats').classList.add('hidden');
   } catch (e) { toast('Import fehlgeschlagen: ' + e.message); }
 }
@@ -542,13 +603,23 @@ async function openProfile(first) {
     <h2>${first ? 'Willkommen bei Tree and me!' : 'Dein Profil'}</h2>
     <div class="meta">Dein Name erscheint später in der Wiener Rangliste. Bitte keinen echten vollen Namen verwenden.</div>
     <div class="av" id="avPrev">${await avatarHtml()}</div>
-    <button class="btn sec" onclick="$('avInput').value='';$('avInput').click()">🖼️ Avatarbild wählen (optional)</button>
+    <button class="btn sec" onclick="$('avInput').value='';$('avInput').click()">🖼️ Avatarbild wählen und zuschneiden (optional)</button>
+    <div style="margin:14px 0 4px"><b>Konto</b></div>
+    ${pr.google ? `<div class="ok">✔ Mit Google verbunden${pr.google.email ? ' (' + esc(pr.google.email) + ')' : ''}</div>`
+      : (CFG.googleClientId ? '<div id="gBtn"></div><div class="small">Damit kannst du dein Profil später auf einem neuen Handy wiederherstellen.</div>'
+      : '<div class="small">„Mit Google anmelden“ wird gerade eingerichtet.</div>')}
     <p><b>Spielername</b></p>
     <input class="txt" id="nameIn" maxlength="20" placeholder="z. B. Baumfreund22" value="${esc(pr.name || '')}">
     <div class="small">3–20 Zeichen: Buchstaben, Ziffern, _ und -</div>
     <button class="btn" onclick="saveProfile()">Speichern</button>
-    ${first ? '' : '<h3>Meine Selfies</h3><div id="mySelfies" class="small">Noch keine Selfies.</div>'}`;
+    ${first ? '' : '<h3>Meine Selfies</h3><div id="mySelfies" class="small">Noch keine Selfies.</div><h3>Meine Bäume</h3><div id="myTrees" class="vlist"></div>'}`;
   $('profile').classList.remove('hidden');
+  if (!pr.google) renderGoogleButton();
+  if (!first) {
+    const vs = Object.values(state.visits).sort((a, b) => b.ts.localeCompare(a.ts));
+    $('myTrees').innerHTML = vs.length ? vs.map(v => `<button onclick="jumpTo('${esc(v.key)}')">${EMOJI[v.kat || 'laub']} ${esc(v.strasse)}, ${esc(v.bezirk)}. Bezirk<span class="small">${esc(v.art)} · Nr. ${esc(v.nummer)} · ${fmtDate(v.ts)} · ${v.points} P</span></button>`).join('')
+      : '<div class="small">Noch keine Bäume besucht.</div>';
+  }
   if (!first) {
     const list = Object.values(state.visits).flatMap(v => (v.photos || []).filter(p => p.kind === 'selfie').map(p => ({ v, p })));
     if (list.length) {
@@ -565,19 +636,92 @@ function saveProfile() {
   saveState(); renderMe(); $('profile').classList.add('hidden'); toast('Hallo ' + n + '!');
 }
 $('avInput').onchange = async e => {
-  const f = e.target.files && e.target.files[0]; if (!f) return;
-  const img = await createImageBitmap(f), side = Math.min(img.width, img.height);
+  const f = e.target.files && e.target.files[0]; if (f) openCropper(await createImageBitmap(f));
+};
+
+// ---------- Avatar zuschneiden ----------
+let crop = null;
+function openCropper(img) {
+  const base = 560 / Math.min(img.width, img.height); // Bild füllt den Kreis
+  crop = { img, base, zoom: 1, x: 0, y: 0 };
+  $('cropZoom').value = 1; drawCrop(); $('cropper').classList.remove('hidden');
+}
+function clampCrop() {
+  const s = crop.base * crop.zoom, w = crop.img.width * s, h = crop.img.height * s;
+  const mx = Math.max(0, (w - 560) / 2), my = Math.max(0, (h - 560) / 2);
+  crop.x = Math.max(-mx, Math.min(mx, crop.x)); crop.y = Math.max(-my, Math.min(my, crop.y));
+}
+function drawCrop() {
+  clampCrop();
+  const ctx = $('cropCv').getContext('2d'), s = crop.base * crop.zoom, w = crop.img.width * s, h = crop.img.height * s;
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 560, 560);
+  ctx.drawImage(crop.img, 280 - w / 2 + crop.x, 280 - h / 2 + crop.y, w, h);
+}
+$('cropZoom').oninput = e => { crop.zoom = +e.target.value; drawCrop(); };
+(() => {
+  const box = $('cropBox'), pts = new Map(); let lastDist = 0;
+  box.addEventListener('pointerdown', e => { box.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); });
+  box.addEventListener('pointermove', e => {
+    if (!crop || !pts.has(e.pointerId)) return;
+    const prev = pts.get(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]);
+    if (pts.size === 2) { // Zwei-Finger-Zoom
+      const [a, b] = [...pts.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      if (lastDist) { crop.zoom = Math.max(1, Math.min(4, crop.zoom * d / lastDist)); $('cropZoom').value = crop.zoom; }
+      lastDist = d;
+    } else { crop.x += (e.clientX - prev[0]) * 2; crop.y += (e.clientY - prev[1]) * 2; }
+    drawCrop();
+  });
+  const up = e => { pts.delete(e.pointerId); lastDist = 0; };
+  box.addEventListener('pointerup', up); box.addEventListener('pointercancel', up);
+})();
+$('cropCancel').onclick = () => $('cropper').classList.add('hidden');
+$('cropOk').onclick = async () => {
   const c = document.createElement('canvas'); c.width = c.height = 256;
-  c.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 256, 256);
+  c.getContext('2d').drawImage($('cropCv'), 0, 0, 560, 560, 0, 0, 256, 256);
   const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
   await putPhoto('avatar', blob);
   state.profile = Object.assign(state.profile || {}, { hasAvatar: true }); saveState();
-  $('avPrev').innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="">`; renderMe();
+  $('cropper').classList.add('hidden');
+  if ($('avPrev')) $('avPrev').innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="">`;
+  renderMe();
 };
+
+// ---------- Mit Google anmelden ----------
+function renderGoogleButton(tries = 0) {
+  if (!CFG.googleClientId || !$('gBtn')) return;
+  if (!window.google || !google.accounts) { if (tries < 20) setTimeout(() => renderGoogleButton(tries + 1), 300); return; }
+  google.accounts.id.initialize({ client_id: CFG.googleClientId, callback: onGoogleLogin });
+  google.accounts.id.renderButton($('gBtn'), { theme: 'outline', size: 'large', text: 'signin_with', locale: 'de', width: 280 });
+}
+async function onGoogleLogin(resp) {
+  // Prototyp: Token wird nur gelesen; prüfen muss es später der Server
+  const b64 = resp.credential.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+  const info = JSON.parse(decodeURIComponent(escape(atob(b64))));
+  const pr = state.profile = state.profile || {};
+  pr.google = { sub: info.sub, email: info.email };
+  pr.id = pr.id || crypto.randomUUID();
+  if (!pr.name && info.given_name) pr.name = (info.given_name.replace(/[^\p{L}\p{N}_-]/gu, '') + Math.floor(10 + Math.random() * 90)).slice(0, 20);
+  saveState(); renderMe();
+  await openProfile(false);
+  if (!pr.hasAvatar && info.picture) {
+    try { const r = await fetch(info.picture.replace(/=s\d+-c$/, '=s512-c')); openCropper(await createImageBitmap(await r.blob())); }
+    catch (e) { toast('Google-Bild konnte nicht übernommen werden – bitte selbst wählen'); }
+  }
+  toast('Mit Google verbunden');
+}
+
+// ---------- Zu einem Baum springen ----------
+function jumpTo(key) {
+  const v = state.visits[key]; if (!v) return;
+  $('profile').classList.add('hidden');
+  map.setView([v.lat, v.lon], 19);
+  openTree(treeFromVisit(v));
+}
 $('btnMe').onclick = () => openProfile(false);
 
 renderPoints();
 renderMe();
+refreshMarkers();
 checkReturnedReport();
 if (!state.profile || !state.profile.name) openProfile(true);
 </script>
