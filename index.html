@@ -172,7 +172,10 @@ async function loadTrees() {
       const key = treeKey(p);
       if (trees.has(key)) continue;
       const t = { key, props: p, latlng: L.latLng(c[1], c[0]) };
-      t.marker = L.marker(t.latlng, { icon: iconFor(t) }).addTo(map).on('click', () => openTree(t));
+      t.marker = L.marker(t.latlng, { icon: iconFor(t) }).addTo(map).on('click', () => {
+        if ($('testMode').checked) { selected = t; setMe(t.latlng, 5); } // Testmodus: Standort = dieser Baum
+        openTree(t);
+      });
       trees.set(key, t);
     }
     if ((gj.features || []).length >= CFG.maxFeatures) showHint('Sehr viele Bäume – näher zoomen für alle');
@@ -201,7 +204,7 @@ if ('geolocation' in navigator) {
   }, err => toast('Kein GPS: ' + err.message + ' – Testmodus nutzen'), { enableHighAccuracy: true, maximumAge: 5000 });
 }
 $('btnLocate').onclick = () => { if (me) map.setView(me.latlng, 18); else toast('Noch kein Standort'); };
-$('testMode').onchange = e => toast(e.target.checked ? 'Testmodus: Tippe auf die Karte, um deinen Standort zu setzen' : 'Testmodus aus – GPS aktiv');
+$('testMode').onchange = e => toast(e.target.checked ? 'Testmodus: Tippe auf einen Baum – du stehst dann direkt davor' : 'Testmodus aus – GPS aktiv');
 map.on('click', e => { if ($('testMode').checked) setMe(e.latlng, 5); });
 
 function inRange(t) {
