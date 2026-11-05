@@ -322,6 +322,15 @@ function bearing(a, b) {
   return (Math.atan2(y, x) / r + 360) % 360;
 }
 let outsideLayer = null, wasOutside = false, arrowState = null;
+// Knöpfe (Testmodus, Mein Standort) über die Meldung schieben, damit sie bedienbar bleiben
+function layoutFab() {
+  const box = $('outside'), shown = !box.classList.contains('hidden');
+  $('fab').style.bottom = shown ? (box.offsetHeight + 32) + 'px' : '';
+}
+function hideOutside() {
+  if (outsideLayer) { map.removeLayer(outsideLayer); outsideLayer = null; }
+  $('outside').classList.add('hidden'); wasOutside = false; layoutFab();
+}
 // Pfeil wächst/schrumpft mit dem Zoom und sitzt knapp außerhalb der Grenze, damit er Wien nicht verdeckt
 function placeArrow() {
   if (!arrowState || !outsideLayer) return;
@@ -336,7 +345,7 @@ function checkOutside(ll) {
   const away = !inWien(ll);
   if (outsideLayer) { map.removeLayer(outsideLayer); outsideLayer = null; }
   $('outside').classList.toggle('hidden', !away);
-  if (!away) { wasOutside = false; return false; }
+  if (!away) { wasOutside = false; layoutFab(); return false; }
   const world = [[-89, -179], [-89, 179], [89, 179], [89, -179]];
   const edge = nearestBorder(ll), km = dist(edge, ll) / 1000, deg = bearing(edge, ll);
   arrowState = { edge, deg, marker: L.marker(edge, { interactive: false, zIndexOffset: 1000 }) };
@@ -347,6 +356,7 @@ function checkOutside(ll) {
   ]).addTo(map);
   placeArrow();
   $('outside').innerHTML = `Dieses Spiel funktioniert ausschließlich in Wien. Du bist aktuell <b>${km < 1 ? 'weniger als 1' : Math.round(km).toLocaleString('de-AT')} Kilometer</b> entfernt. Bitte begib dich nach Wien, um zu spielen.`;
+  layoutFab();
   if (!wasOutside) { wasOutside = true; showHint(''); map.fitBounds(WIEN, { padding: [30, 30] }); }
   return true;
 }
@@ -370,7 +380,7 @@ if ('geolocation' in navigator) {
   }, err => toast('Kein GPS: ' + err.message + ' – Testmodus nutzen'), { enableHighAccuracy: true, maximumAge: 5000 });
 }
 $('btnLocate').onclick = () => { if (me) map.setView(me.latlng, 18); else toast('Noch kein Standort'); };
-$('testMode').onchange = e => toast(e.target.checked ? 'Testmodus: Tippe auf einen Baum – du stehst dann direkt davor' : 'Testmodus aus – GPS aktiv');
+$('testMode').onchange = e => { if (e.target.checked) hideOutside(); else if (me && !$('testMode').checked) checkOutside(me.latlng); toast(e.target.checked ? 'Testmodus: Tippe auf einen Baum – du stehst dann direkt davor' : 'Testmodus aus – GPS aktiv'); };
 map.on('click', e => { if ($('testMode').checked) { setMe(e.latlng, 5); checkOutside(e.latlng); } });
 
 function inRange(t) {
