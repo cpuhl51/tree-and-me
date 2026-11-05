@@ -268,7 +268,7 @@ function setMe(latlng, acc) {
     meMarker = L.circleMarker(latlng, { radius: 8, color: '#fff', weight: 3, fillColor: '#1a73e8', fillOpacity: 1 }).addTo(map);
     accCircle = L.circle(latlng, { radius: acc, color: '#1a73e8', weight: 1, fillOpacity: .08 }).addTo(map);
   } else { meMarker.setLatLng(latlng); accCircle.setLatLng(latlng).setRadius(acc); }
-  if (selected) openTree(selected); // Abstand aktualisieren
+  updateDistance(); // nur Abstand + Knöpfe aktualisieren, Fenster nicht neu aufbauen
 }
 let firstFix = true;
 if ('geolocation' in navigator) {
@@ -298,14 +298,15 @@ function openTree(t) {
     <h2>${EMOJI[kat]} ${esc(p.GATTUNG_ART || 'Unbekannte Art')}</h2>
     <div class="meta">${KAT_NAME[kat]} · ${esc(p.OBJEKT_STRASSE)} · ${esc(p.BEZIRK)}. Bezirk</div>
     <div class="grid">
-      <b>Gattung</b><span><a href="${wikiUrl(p.GATTUNG_ART)}" target="_blank" rel="noopener">${esc(genusOf(p.GATTUNG_ART))} auf Wikipedia</a></span>
+      <b>Wikipedia</b><span><a id="wikiLink" href="${wikiSearchUrl(p.GATTUNG_ART)}" target="_blank" rel="noopener">${esc(speciesOf(p.GATTUNG_ART) || genusOf(p.GATTUNG_ART))}</a></span>
       <b>Baumnummer</b><span>${esc(p.BAUMNUMMER)}</span>
       <b>Pflanzjahr</b><span>${esc(p.PFLANZJAHR_TXT ?? p.PFLANZJAHR)}</span>
       <b>Stammumfang</b><span>${esc(p.STAMMUMFANG_TXT ?? p.STAMMUMFANG)}</span>
       <b>Höhe</b><span>${esc(p.BAUMHOEHE_TXT ?? '')}</span>
       <b>Krone</b><span>${esc(p.KRONENDURCHMESSER_TXT ?? '')}</span>
-      <b>Entfernung</b><span>${d === null ? 'Standort unbekannt' : d + ' m'}</span>
+      <b>Entfernung</b><span id="distVal">${d === null ? 'Standort unbekannt' : d + ' m'}</span>
     </div>`;
+  resolveWiki(p.GATTUNG_ART);
   if (v) {
     html += `<div class="ok">✔ Besucht am ${fmtDate(v.ts)} · ${v.points} Punkte${v.pending ? ` (vorläufig bis ${fmtDate(v.pendingUntil)})` : ''}</div>
       <button class="btn sec" onclick="startCam('selfie')">🤳 Selfie mit dem Baum (für dich / dein Profil)</button>
@@ -315,9 +316,9 @@ function openTree(t) {
     renderPhotoList(v);
   } else {
     const ok = inRange(t);
-    if (!ok) html += `<div class="warn">Geh näher hin (max. ${CFG.radius} m), um den Baum zu scannen.</div>`;
-    html += `<button class="btn" ${ok ? '' : 'disabled'} onclick="startCam('ocr')">📷 Plakette scannen</button>
-      <button class="btn sec" ${ok ? '' : 'disabled'} onclick="planB()">Plakette geht nicht</button>`;
+    html += `<div class="warn${ok ? ' hidden' : ''}" id="warnRange">Geh näher hin (max. ${CFG.radius} m), um den Baum zu scannen.</div>`;
+    html += `<button class="btn" id="btnScan" ${ok ? '' : 'disabled'} onclick="startCam('ocr')">📷 Plakette scannen</button>
+      <button class="btn sec" id="btnPlanB" ${ok ? '' : 'disabled'} onclick="planB()">Plakette geht nicht</button>`;
   }
   html += `<div class="gallery">📷 Fotos anderer Spieler von diesem Baum – kommen mit dem Server.</div>
     <button class="btn sec" onclick="reportTree()">⚠️ Problem an die Wiener Stadtgärten melden</button>
@@ -497,7 +498,50 @@ async function importData(file) {
 }
 
 // ---------- Wikipedia ----------
-function wikiUrl(art) { return 'https://de.wikipedia.org/wiki/' + encodeURIComponent(genusOf(art)); }
+// Wissenschaftlicher Artname ohne Sorte, z. B. "Acer platanoides 'Globosum'" -> "Acer platanoides", "Tilia x euchlora" -> "Tilia × euchlora"
+function speciesOf(art) {
+  const latin = String(art || '').replace(/\(.*?\)/g, ' ').replace(/['‘’"„“].*$/, ' ').trim();
+  const w = latin.split(/\s+/).filter(Boolean);
+  if (w.length < 2) return '';
+  if (/^(x|×)$/i.test(w[1]) && w[2]) return `${w[0]} × ${w[2].toLowerCase()}`;
+  if (/^(spec|sp|spp|ssp|var)\.?$/i.test(w[1]) || !/^[a-zäöü-]+$/.test(w[1])) return '';
+  return `${w[0]} ${w[1]}`;
+}
+const germanOf = art => ((String(art || '').match(/\(([^)]+)\)/) || [])[1] || '').trim();
+function wikiCandidates(art) { return [...new Set([speciesOf(art), germanOf(art), genusOf(art)].filter(Boolean))]; }
+function wikiSearchUrl(art) { return 'https://de.wikipedia.org/w/index.php?go=Go&search=' + encodeURIComponent(wikiCandidates(art)[0] || ''); }
+const wikiCache = (() => { try { return JSON.parse(localStorage.getItem('tam_wiki')) || {}; } catch { return {}; } })();
+// Fragt Wikipedia, welcher Kandidat ein echter Artikel ist (keine Begriffsklärung) und setzt den Link darauf
+async function resolveWiki(art) {
+  const set = title => { const a = $('wikiLink'); if (a && title) { a.href = 'https://de.wikipedia.org/wiki/' + encodeURIComponent(title.replace(/ /g, '_')); a.title = title; } };
+  if (wikiCache[art]) return set(wikiCache[art]);
+  const cands = wikiCandidates(art); if (!cands.length) return;
+  try {
+    const url = 'https://de.wikipedia.org/w/api.php?action=query&format=json&origin=*&redirects=1&prop=pageprops&ppprop=disambiguation&titles=' + encodeURIComponent(cands.join('|'));
+    const j = await (await fetch(url)).json(), q = j.query || {};
+    const map1 = {}; (q.normalized || []).forEach(n => map1[n.from] = n.to);
+    const redir = {}; (q.redirects || []).forEach(r => redir[r.from] = r.to);
+    const pages = Object.values(q.pages || {});
+    for (const c of cands) {
+      let t = map1[c] || c; t = redir[t] || t;
+      const pg = pages.find(x => x.title === t);
+      if (pg && !('missing' in pg) && !(pg.pageprops && 'disambiguation' in pg.pageprops)) {
+        wikiCache[art] = t; try { localStorage.setItem('tam_wiki', JSON.stringify(wikiCache)); } catch {}
+        return set(t);
+      }
+    }
+  } catch (e) { /* offline: Suchlink bleibt */ }
+}
+
+// ---------- Abstand live aktualisieren ----------
+function updateDistance() {
+  const t = selected; if (!t || !$('distVal')) return;
+  $('distVal').textContent = me ? Math.round(dist(me.latlng, t.latlng)) + ' m' : 'Standort unbekannt';
+  if (!$('btnScan')) return;
+  const ok = inRange(t);
+  $('btnScan').disabled = !ok; $('btnPlanB').disabled = !ok;
+  $('warnRange').classList.toggle('hidden', ok);
+}
 
 // ---------- Fotos in die Cloud (über das Teilen-Menü) ----------
 const PHOTO_KIND = {
