@@ -33,6 +33,13 @@
   .warn { background:#fff4e0; color:var(--warn); padding:10px; border-radius:10px; font-size:14px; margin:8px 0; }
   .close { float:right; background:none; border:0; font-size:22px; color:var(--quiet); }
   #toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%); z-index:1300; background:#1d241e; color:#fff; padding:10px 16px; border-radius:10px; font-size:14px; display:none; max-width:90vw; text-align:center; }
+  #live { position:fixed; inset:0; z-index:1450; background:#000; }
+  #live video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  #liveGuide { position:absolute; left:50%; top:42%; width:64vw; height:64vw; max-width:360px; max-height:360px; transform:translate(-50%,-50%); border:3px solid #fff; border-radius:18px; box-shadow:0 0 0 100vmax rgba(0,0,0,.45); transition:border-color .2s; }
+  #liveGuide.hit { border-color:#7ccf5a; }
+  #liveMsg { position:absolute; left:16px; right:16px; top:calc(42% + min(32vw,180px) + 16px); color:#fff; text-align:center; font-size:15px; }
+  #liveBar { position:absolute; left:16px; right:16px; bottom:calc(24px + env(safe-area-inset-bottom)); display:flex; gap:10px; }
+  #liveBar .btn { margin:0; }
   #busy { position:fixed; inset:0; z-index:1400; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; color:#fff; font-size:16px; }
   .tree-ic { font-size:22px; line-height:28px; text-align:center; filter:drop-shadow(0 1px 1px rgba(0,0,0,.35)); }
   .tree-ic.visited { background:rgba(47,107,58,.25); border:2px solid var(--green); border-radius:50%; }
@@ -95,6 +102,12 @@
 <div id="sheet" class="sheet hidden"></div>
 <div id="stats" class="panel hidden"></div>
 <div id="toast"></div>
+<div id="live" class="hidden">
+  <video id="liveVideo" playsinline muted></video>
+  <div id="liveGuide"></div>
+  <div id="liveMsg">Halte die Plakette in den Rahmen</div>
+  <div id="liveBar"><button class="btn ghost" style="color:#ddd;background:rgba(255,255,255,.12)" id="liveCancel">Abbrechen</button><button class="btn sec hidden" id="liveTorch" style="flex:0 0 56px">🔦</button><button class="btn" id="liveShot">📷 Foto machen</button></div>
+</div>
 <div id="busy" class="hidden">Bitte warten …</div>
 <input type="file" id="camInput" accept="image/*" capture="environment" hidden>
 <input type="file" id="avInput" accept="image/*" hidden>
@@ -330,7 +343,7 @@ function openTree(t) {
   } else {
     const ok = inRange(t);
     html += `<div class="warn${ok ? ' hidden' : ''}" id="warnRange">Geh näher hin (max. ${CFG.radius} m), um den Baum zu scannen.</div>`;
-    html += `<button class="btn" id="btnScan" ${ok ? '' : 'disabled'} onclick="startCam('ocr')">📷 Plakette scannen</button>
+    html += `<button class="btn" id="btnScan" ${ok ? '' : 'disabled'} onclick="startLive()">📷 Plakette scannen</button>
       <button class="btn sec" id="btnPlanB" ${ok ? '' : 'disabled'} onclick="planB()">Plakette geht nicht</button>`;
   }
   html += `<div class="gallery">📷 Fotos anderer Spieler von diesem Baum – kommen mit dem Server.</div>
@@ -366,16 +379,86 @@ $('camInput').onchange = async e => {
   try {
     const numbers = await ocr(file);
     busy(false);
-    const hit = matchNumber(t, numbers);
-    if (hit === t) return recordVisit(t, 'ocr', null, lastPhoto);
-    if (hit) {
-      if (confirm(`Die Plakette passt zu Baum Nr. ${hit.props.BAUMNUMMER} (${hit.props.GATTUNG_ART}) in der Nähe. Diesen Baum werten?`)) return recordVisit(hit, 'ocr', null, lastPhoto);
-      return;
-    }
-    ocrFailed(t, numbers);
+    if (!acceptHit(t, matchNumber(t, numbers), lastPhoto)) ocrFailed(t, numbers);
   } catch (err) {
     busy(false); console.error(err); ocrFailed(t, []);
   }
+};
+
+function acceptHit(t, hit, photo) {
+  if (hit === t) { recordVisit(t, 'ocr', null, photo); return true; }
+  if (hit) {
+    if (confirm(`Die Plakette passt zu Baum Nr. ${hit.props.BAUMNUMMER} (${hit.props.GATTUNG_ART}) in der Nähe. Diesen Baum werten?`)) recordVisit(hit, 'ocr', null, photo);
+    return true;
+  }
+  return false;
+}
+
+// ---------- Live-Scan: Handy auf die Plakette halten, ohne auszulösen ----------
+let live = null;
+async function startLive() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return startCam('ocr');
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }); }
+  catch (e) { toast('Kamera nicht verfügbar – normales Foto'); return startCam('ocr'); }
+  const v = $('liveVideo'); v.srcObject = stream; await v.play().catch(() => {});
+  live = { stream, t: selected, votes: {}, frames: 0, running: true, torch: false };
+  const track = stream.getVideoTracks()[0], caps = track.getCapabilities ? track.getCapabilities() : {};
+  $('liveTorch').classList.toggle('hidden', !caps.torch);
+  $('liveGuide').classList.remove('hit'); $('liveMsg').textContent = 'Halte die Plakette in den Rahmen';
+  $('live').classList.remove('hidden');
+  ensureOcr().then(() => liveLoop());
+}
+function stopLive() {
+  if (!live) return;
+  live.running = false; live.stream.getTracks().forEach(tr => tr.stop());
+  $('liveVideo').srcObject = null; $('live').classList.add('hidden'); live = null;
+}
+// Bildausschnitt im Rahmen aus dem Videobild holen
+function grabGuide(full) {
+  const v = $('liveVideo'), vw = v.videoWidth, vh = v.videoHeight; if (!vw) return null;
+  const c = document.createElement('canvas');
+  if (full) { c.width = vw; c.height = vh; c.getContext('2d').drawImage(v, 0, 0); return c; }
+  const el = v.getBoundingClientRect(), g = $('liveGuide').getBoundingClientRect();
+  const sc = Math.max(el.width / vw, el.height / vh), ox = (el.width - vw * sc) / 2, oy = (el.height - vh * sc) / 2;
+  const sx = (g.left - el.left - ox) / sc, sy = (g.top - el.top - oy) / sc, sw = g.width / sc, sh = g.height / sc;
+  const S = Math.min(1, 900 / sw); c.width = Math.round(sw * S); c.height = Math.round(sh * S);
+  c.getContext('2d').drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return c;
+}
+async function liveLoop() {
+  while (live && live.running) {
+    const frame = grabGuide(false);
+    if (frame) {
+      const nums = await quickOcr(frame, live.frames);
+      if (!live) return;
+      live.frames++;
+      nums.forEach(([n, c]) => live.votes[n] = (live.votes[n] || 0) + c);
+      const ranked = Object.entries(live.votes).sort((a, b) => b[1] - a[1]).map(([n]) => n);
+      const hit = matchNumber(live.t, nums.map(x => x[0])) || (live.frames % 4 === 0 ? matchNumber(live.t, ranked.slice(0, 3)) : null);
+      if (hit) {
+        $('liveGuide').classList.add('hit'); $('liveMsg').textContent = `Erkannt: Nr. ${hit.props.BAUMNUMMER} ✔`;
+        const photo = await new Promise(r => grabGuide(true).toBlob(r, 'image/jpeg', 0.85));
+        const t = live.t; await new Promise(r => setTimeout(r, 500)); stopLive();
+        selected = t; acceptHit(t, hit, photo); return;
+      }
+      $('liveMsg').textContent = nums.length ? `Lese … ${nums[0][0]}` : (live.frames > 12 ? 'Näher ran, ruhig halten – oder „Foto machen“' : 'Halte die Plakette in den Rahmen');
+    }
+    await new Promise(r => setTimeout(r, 150));
+  }
+}
+$('liveCancel').onclick = () => stopLive();
+$('liveShot').onclick = async () => { // klassischer Weg: Standbild mit voller Erkennung
+  const frame = grabGuide(true); if (!frame) return;
+  const blob = await new Promise(r => frame.toBlob(r, 'image/jpeg', 0.9));
+  const t = live.t; stopLive(); selected = t; lastPhoto = blob;
+  busy(true, 'Lese Plakette …');
+  try { const numbers = await ocr(blob); busy(false); if (!acceptHit(t, matchNumber(t, numbers), blob)) ocrFailed(t, numbers); }
+  catch (e) { busy(false); ocrFailed(t, []); }
+};
+$('liveTorch').onclick = async () => {
+  if (!live) return; live.torch = !live.torch;
+  try { await live.stream.getVideoTracks()[0].applyConstraints({ advanced: [{ torch: live.torch }] }); } catch (e) {}
 };
 
 async function shrink(file, max) {
@@ -391,7 +474,7 @@ let ocrWorker = null;
 function findPlate(img) {
   const S = 360 / Math.max(img.width, img.height), w = Math.round(img.width * S), h = Math.round(img.height * S);
   const c = document.createElement('canvas'); c.width = w; c.height = h;
-  const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0, w, h);
+  const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(img, 0, 0, w, h);
   const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h), sat = new Float32Array(w * h);
   for (let i = 0; i < w * h; i++) {
     const r = d[i * 4], gg = d[i * 4 + 1], b = d[i * 4 + 2];
@@ -430,7 +513,7 @@ function cropVariant(img, box, mode, rot) {
   const bw = box ? Math.min(img.width - bx, box.w * (1 + 2 * pad)) : img.width, bh = box ? Math.min(img.height - by, box.h * (1 + 2 * pad)) : img.height;
   const S = Math.min(4, 700 / Math.max(bw, bh)), W = Math.round(bw * S), H = Math.round(bh * S);
   const c = document.createElement('canvas'); c.width = W; c.height = H;
-  const ctx = c.getContext('2d');
+  const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
   ctx.translate(W / 2, H / 2); ctx.rotate(rot * Math.PI / 180); ctx.translate(-W / 2, -H / 2);
   ctx.filter = mode === 'hi' ? 'grayscale(1) contrast(2.5)' : mode === 'inv' ? 'grayscale(1) invert(1) contrast(2)' : 'grayscale(1) contrast(1.4)';
@@ -506,11 +589,33 @@ function digitLine(c) {
   const octx = o.getContext('2d'); octx.imageSmoothingEnabled = true; octx.drawImage(t, 0, 0, o.width, o.height);
   return o;
 }
-async function ocr(file) {
+async function ensureOcr() {
   if (!ocrWorker) {
     ocrWorker = await Tesseract.createWorker('eng');
-    await ocrWorker.setParameters({ tessedit_char_whitelist: '0123456789' });
+    await ocrWorker.setParameters({ tessedit_char_whitelist: '0123456789', tessedit_pageseg_mode: '7' });
   }
+}
+// Schnelle Erkennung für ein Live-Bild (nur wenige Varianten, damit es flüssig bleibt)
+const LIVE_VARIANTS = [];
+for (const rot of [0, -8, 8, -4, 4]) for (const usePlate of [false, true]) for (const [C, R] of [[12, 2], [22, 3]]) LIVE_VARIANTS.push({ rot, usePlate, C, R });
+async function quickOcr(frame, k = 0) {
+  await ensureOcr();
+  const out = {}, plates = findPlate(frame);
+  // pro Bild zwei Varianten; über mehrere Bilder hinweg werden alle durchprobiert
+  const variants = [LIVE_VARIANTS[(2 * k) % LIVE_VARIANTS.length], LIVE_VARIANTS[(2 * k + 1) % LIVE_VARIANTS.length]];
+  for (const vr of variants) {
+    const box = vr.usePlate ? plates[0] || null : null;
+    const cv = digitLine(binarize(cropVariant(frame, box, 'norm', vr.rot), vr.C, vr.R)); if (!cv) continue;
+    for (const psm of ['7', '8']) {
+      await ocrWorker.setParameters({ tessedit_pageseg_mode: psm });
+      const { data } = await ocrWorker.recognize(cv);
+      for (const wd of data.words || []) { const n = normNum(wd.text); if (n.length >= 2 && n.length <= 6 && wd.confidence >= 35) out[n] = Math.max(out[n] || 0, wd.confidence); }
+    }
+  }
+  return Object.entries(out).sort((a, b) => b[1] - a[1]);
+}
+async function ocr(file) {
+  await ensureOcr();
   const img = await createImageBitmap(file);
   const plates = findPlate(img);
   const tries = [];
@@ -569,7 +674,7 @@ function ocrFailed(t, numbers) {
     <h2>Plakette nicht erkannt</h2>
     <div class="small">Tipp: Plakette möglichst groß, scharf und ohne Gegenlicht fotografieren – sie sollte etwa ein Drittel des Bildes füllen.</div>
     <div class="meta">${numbers.length ? 'Gelesen: ' + esc(numbers.join(', ')) + ' – passt zu keinem Baum in der Nähe.' : 'Es wurde keine Nummer gelesen.'}</div>
-    <button class="btn" onclick="startCam('ocr')">📷 Nochmal versuchen</button>
+    <button class="btn" onclick="startLive()">📷 Nochmal versuchen</button>
     <button class="btn sec" onclick="planB(true)">Plakette geht nicht (Foto verwenden)</button>`;
 }
 
