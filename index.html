@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Tree and me</title>
 <meta name="theme-color" content="#2f6b3a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root { --green:#2f6b3a; --green2:#e6f1e7; --ink:#1d241e; --quiet:#5d6b5f; --bg:#fff; --line:#d9e0da; --warn:#b26a00; }
@@ -318,7 +321,17 @@ function bearing(a, b) {
   const x = Math.cos(a.lat * r) * Math.sin(b.lat * r) - Math.sin(a.lat * r) * Math.cos(b.lat * r) * Math.cos((b.lng - a.lng) * r);
   return (Math.atan2(y, x) / r + 360) % 360;
 }
-let outsideLayer = null, wasOutside = false;
+let outsideLayer = null, wasOutside = false, arrowState = null;
+// Pfeil wächst/schrumpft mit dem Zoom und sitzt knapp außerhalb der Grenze, damit er Wien nicht verdeckt
+function placeArrow() {
+  if (!arrowState || !outsideLayer) return;
+  const s = Math.round(Math.max(14, Math.min(64, 48 * Math.pow(2, map.getZoom() - 10))));
+  const r = arrowState.deg * Math.PI / 180, p = map.latLngToContainerPoint(arrowState.edge);
+  const off = s / 2 + 6, pos = map.containerPointToLatLng([p.x + Math.sin(r) * off, p.y - Math.cos(r) * off]);
+  arrowState.marker.setLatLng(pos).setIcon(L.divIcon({ className: 'arrow-ic', iconSize: [s, s], iconAnchor: [s / 2, s / 2],
+    html: `<svg width="${s}" height="${s}" viewBox="0 0 64 64" style="transform:rotate(${arrowState.deg}deg)"><path d="M32 4 L52 30 H40 V60 H24 V30 H12 Z" fill="#1a5fd0" stroke="#fff" stroke-width="3" stroke-linejoin="round"/></svg>` }));
+}
+map.on('zoomend', placeArrow);
 function checkOutside(ll) {
   const away = !inWien(ll);
   if (outsideLayer) { map.removeLayer(outsideLayer); outsideLayer = null; }
@@ -326,13 +339,13 @@ function checkOutside(ll) {
   if (!away) { wasOutside = false; return false; }
   const world = [[-89, -179], [-89, 179], [89, 179], [89, -179]];
   const edge = nearestBorder(ll), km = dist(edge, ll) / 1000, deg = bearing(edge, ll);
-  const arrow = L.divIcon({ className: 'arrow-ic', iconSize: [64, 64], iconAnchor: [32, 32],
-    html: `<svg width="64" height="64" viewBox="0 0 64 64" style="transform:rotate(${deg}deg)"><path d="M32 4 L52 30 H40 V60 H24 V30 H12 Z" fill="#1a5fd0" stroke="#fff" stroke-width="3" stroke-linejoin="round"/></svg>` });
+  arrowState = { edge, deg, marker: L.marker(edge, { interactive: false, zIndexOffset: 1000 }) };
   outsideLayer = L.layerGroup([
     L.polygon([world, WIEN], { stroke: false, fillColor: '#1a5fd0', fillOpacity: 0.28, interactive: false }),
     L.polygon(WIEN, { color: '#1a5fd0', weight: 4, fill: false, interactive: false }),
-    L.marker(edge, { icon: arrow, interactive: false, zIndexOffset: 1000 })
+    arrowState.marker
   ]).addTo(map);
+  placeArrow();
   $('outside').innerHTML = `Dieses Spiel funktioniert ausschließlich in Wien. Du bist aktuell <b>${km < 1 ? 'weniger als 1' : Math.round(km).toLocaleString('de-AT')} Kilometer</b> entfernt. Bitte begib dich nach Wien, um zu spielen.`;
   if (!wasOutside) { wasOutside = true; showHint(''); map.fitBounds(WIEN, { padding: [30, 30] }); }
   return true;
@@ -1143,6 +1156,7 @@ function jumpTo(key) {
 }
 $('btnMe').onclick = () => openProfile(false);
 
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW', e));
 renderPoints();
 renderMe();
 refreshMarkers();
