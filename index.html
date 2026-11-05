@@ -61,6 +61,17 @@
   #cropBox { width:280px; height:280px; border-radius:50%; overflow:hidden; touch-action:none; box-shadow:0 0 0 3px #fff; }
   #cropper input[type=range] { width:280px; }
   #cropper .row { display:flex; gap:10px; width:280px; }
+  .info { display:flex; gap:10px; align-items:flex-end; }
+  .info .grid { flex:1; min-width:0; }
+  .info svg { flex:0 0 auto; width:118px; height:auto; }
+  details.grp { border-bottom:1px solid var(--line); }
+  details.grp summary { display:flex; justify-content:space-between; padding:9px 4px; font-size:14px; cursor:pointer; list-style:none; }
+  details.grp summary::-webkit-details-marker { display:none; }
+  details.grp summary::before { content:'▸'; color:var(--quiet); margin-right:8px; }
+  details.grp[open] summary::before { content:'▾'; }
+  details.grp summary span:first-child { flex:1; }
+  details.grp .btn { margin:4px 0 10px; padding:9px; font-size:14px; }
+  #subsetChip { position:fixed; top:104px; left:12px; z-index:900; background:var(--green); color:#fff; border:0; border-radius:16px; padding:6px 12px; font-size:13px; box-shadow:0 1px 4px rgba(0,0,0,.2); }
   .gallery { border:1px dashed var(--line); border-radius:10px; padding:10px; font-size:13px; color:var(--quiet); margin-top:10px; }
 </style>
 </head>
@@ -76,6 +87,7 @@
 <div id="filter">
   <button data-m="all" class="on">Alle</button><button data-m="open">Offen</button><button data-m="visited">Besucht</button>
 </div>
+<button id="subsetChip" class="hidden" onclick="clearSubset()"></button>
 <div id="fab">
   <label><input type="checkbox" id="testMode"> Testmodus</label>
   <button id="btnLocate">◎ Mein Standort</button>
@@ -193,7 +205,7 @@ function visitedIcon(kat) {
 }
 const openLayer = L.layerGroup().addTo(map), visitedLayer = L.layerGroup().addTo(map);
 const visitedMarkers = new Map();
-let mode = 'all';
+let mode = 'all', subset = null; // subset = {label, keys:Set} aus der Statistik
 function treeFromVisit(v) {
   return trees.get(v.key) || { key: v.key, latlng: L.latLng(v.lat, v.lon),
     props: v.props || { BAUMNUMMER: v.nummer, GATTUNG_ART: v.art, BEZIRK: v.bezirk, OBJEKT_STRASSE: v.strasse } };
@@ -206,10 +218,11 @@ function refreshMarkers() {
   // besuchte Bäume: immer vorhanden, unabhängig vom Zoom
   for (const [k, m] of visitedMarkers) if (!state.visits[k]) { visitedLayer.removeLayer(m); visitedMarkers.delete(k); }
   for (const v of Object.values(state.visits)) {
-    if (visitedMarkers.has(v.key)) continue;
-    const m = L.marker([v.lat, v.lon], { icon: visitedIcon(v.kat || category(v.art)), zIndexOffset: 500 })
-      .on('click', () => onTreeClick(treeFromVisit(v)));
-    visitedLayer.addLayer(m); visitedMarkers.set(v.key, m);
+    if (!visitedMarkers.has(v.key)) visitedMarkers.set(v.key, L.marker([v.lat, v.lon], { icon: visitedIcon(v.kat || category(v.art)), zIndexOffset: 500 })
+      .on('click', () => onTreeClick(treeFromVisit(v))));
+    const m = visitedMarkers.get(v.key), show = !subset || subset.keys.has(v.key);
+    if (show && !visitedLayer.hasLayer(m)) visitedLayer.addLayer(m);
+    if (!show && visitedLayer.hasLayer(m)) visitedLayer.removeLayer(m);
   }
   // offene Bäume
   for (const t of trees.values()) {
@@ -218,7 +231,7 @@ function refreshMarkers() {
     if (!show && openLayer.hasLayer(t.marker)) openLayer.removeLayer(t.marker);
   }
   map[mode === 'open' ? 'removeLayer' : 'addLayer'](visitedLayer);
-  map[mode === 'visited' ? 'removeLayer' : 'addLayer'](openLayer);
+  map[mode === 'visited' || subset ? 'removeLayer' : 'addLayer'](openLayer);
 }
 document.querySelectorAll('#filter button').forEach(b => b.onclick = () => {
   mode = b.dataset.m;
@@ -297,7 +310,7 @@ function openTree(t) {
   let html = `<button class="close" onclick="closeSheet()">×</button>
     <h2>${EMOJI[kat]} ${esc(p.GATTUNG_ART || 'Unbekannte Art')}</h2>
     <div class="meta">${KAT_NAME[kat]} · ${esc(p.OBJEKT_STRASSE)} · ${esc(p.BEZIRK)}. Bezirk</div>
-    <div class="grid">
+    <div class="info"><div class="grid">
       <b>Wikipedia</b><span><a id="wikiLink" href="${wikiSearchUrl(p.GATTUNG_ART)}" target="_blank" rel="noopener">${esc(speciesOf(p.GATTUNG_ART) || genusOf(p.GATTUNG_ART))}</a></span>
       <b>Baumnummer</b><span>${esc(p.BAUMNUMMER)}</span>
       <b>Pflanzjahr</b><span>${esc(p.PFLANZJAHR_TXT ?? p.PFLANZJAHR)}</span>
@@ -305,7 +318,7 @@ function openTree(t) {
       <b>Höhe</b><span>${esc(p.BAUMHOEHE_TXT ?? '')}</span>
       <b>Krone</b><span>${esc(p.KRONENDURCHMESSER_TXT ?? '')}</span>
       <b>Entfernung</b><span id="distVal">${d === null ? 'Standort unbekannt' : d + ' m'}</span>
-    </div>`;
+    </div>${treeSvg(p, kat)}</div>`;
   resolveWiki(p.GATTUNG_ART);
   if (v) {
     html += `<div class="ok">✔ Besucht am ${fmtDate(v.ts)} · ${v.points} Punkte${v.pending ? ` (vorläufig bis ${fmtDate(v.pendingUntil)})` : ''}</div>
@@ -465,16 +478,21 @@ $('btnStats').onclick = () => {
   const p = $('stats');
   if (!p.classList.contains('hidden')) return p.classList.add('hidden');
   const v = Object.values(state.visits), tt = totals();
-  const byBez = {}, byGen = {};
-  v.forEach(x => { byBez[x.bezirk] = (byBez[x.bezirk] || 0) + 1; byGen[x.gattung] = (byGen[x.gattung] || 0) + 1; });
-  const rows = (o, label) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<tr><td>${esc(label(k))}</td><td>${n}</td></tr>`).join('') || '<tr><td>noch nichts</td><td></td></tr>';
+  const groups = (field, label) => {
+    const g = {}; v.forEach(x => (g[x[field]] = g[x[field]] || []).push(x));
+    const list = Object.entries(g).sort((a, b) => b[1].length - a[1].length);
+    if (!list.length) return '<div class="small">noch nichts</div>';
+    return list.map(([k, xs]) => `<details class="grp"><summary><span>${esc(label(k))}</span><span>${xs.length}</span></summary>
+      <div class="vlist">${xs.sort((a, b) => b.ts.localeCompare(a.ts)).map(x => `<button onclick="jumpTo('${esc(x.key)}')">${EMOJI[x.kat || 'laub']} ${esc(x.strasse)}, ${esc(x.bezirk)}. Bezirk<span class="small">${esc(x.art)} · Nr. ${esc(x.nummer)} · ${fmtDate(x.ts)}</span></button>`).join('')}</div>
+      <button class="btn sec" onclick="showSubset('${field}', '${esc(k)}', '${esc(label(k))}')">🗺️ Nur diese ${xs.length} auf der Karte zeigen</button></details>`).join('');
+  };
   p.innerHTML = `<button class="close" onclick="$('stats').classList.add('hidden')">×</button>
     <h2>Deine Statistik</h2>
     <div class="big">${tt.all} Punkte</div>
     <div class="small">${tt.pend ? `davon ${tt.pend} vorläufig (Meldungen werden ${CFG.reportWorkdays} Werktage geprüft)` : ''}</div>
     <p>${tt.count} Bäume besucht · ${state.districts.length} von 23 Bezirken</p>
-    <h3>Bezirke</h3><table class="stat">${rows(byBez, k => k + '. Bezirk')}</table>
-    <h3>Gattungen</h3><table class="stat">${rows(byGen, k => k)}</table>
+    <h3>Bezirke</h3>${groups('bezirk', k => k + '. Bezirk')}
+    <h3>Gattungen</h3>${groups('gattung', k => k)}
     <div class="small">Vergleich mit der Gesamtzahl in Wien und die Rangliste kommen mit dem Server.</div>
     <h3>Sicherung</h3>
     <button class="btn sec" onclick="exportData()">Besuche exportieren (JSON)</button>
@@ -755,9 +773,63 @@ async function onGoogleLogin(resp) {
 }
 
 // ---------- Zu einem Baum springen ----------
+function showSubset(field, val, label) {
+  const keys = new Set(Object.values(state.visits).filter(x => String(x[field]) === val).map(x => x.key));
+  subset = { label, keys };
+  $('stats').classList.add('hidden'); closeSheet();
+  $('subsetChip').textContent = `${label}: ${keys.size} ✕`; $('subsetChip').classList.remove('hidden');
+  refreshMarkers();
+  const pts = [...keys].map(k => [state.visits[k].lat, state.visits[k].lon]);
+  if (pts.length === 1) map.setView(pts[0], 18); else map.fitBounds(pts, { padding: [40, 40], maxZoom: 18 });
+}
+function clearSubset() { subset = null; $('subsetChip').classList.add('hidden'); refreshMarkers(); loadTrees(); }
+
+// ---------- Baum maßstäblich neben einem Einfamilienhaus ----------
+// Größenklassen laut Baumkataster: Höhe bis „über 35 m“, Krone bis „über 21 m“ -> Zeichnung ausgelegt auf 40 m Höhe
+const SC = { maxH: 40, W: 28 };
+function rangeMid(txt, overVal) {
+  const n = (String(txt || '').match(/\d+/g) || []).map(Number);
+  if (!n.length) return null;
+  if (/über|>/i.test(txt)) return overVal;
+  return n.length > 1 ? (n[0] + n[1]) / 2 : n[0];
+}
+function treeSvg(p, kat) {
+  const h = rangeMid(p.BAUMHOEHE_TXT, 38), cr = rangeMid(p.KRONENDURCHMESSER_TXT, 23);
+  const U = Number(p.STAMMUMFANG) || 0;
+  if (!h) return '';
+  const H = SC.maxH + 2, G = SC.maxH, cx = 15.5;           // Koordinaten in Metern, Boden bei y = G
+  const cw = Math.max(cr || h * 0.4, 1);                    // Kronendurchmesser
+  const trunk = Math.max(U / 100 / Math.PI, 0.15) * 2;       // Stamm 2-fach überhöht, sonst unsichtbar
+  const top = G - h;
+  let crown;
+  if (kat === 'nadel') {
+    crown = `<path d="M${cx} ${top} L${cx + cw / 2} ${G - h * 0.12} L${cx - cw / 2} ${G - h * 0.12} Z"/>`;
+  } else {
+    const bottom = G - h * (kat === 'obst' ? 0.3 : 0.38);
+    crown = `<ellipse cx="${cx}" cy="${(top + bottom) / 2}" rx="${cw / 2}" ry="${(bottom - top) / 2}"/>`;
+  }
+  // Haus: 10 m breit, 2 Geschosse (6 m) + Satteldach (3 m)
+  const hx = 1, hw = 10, wall = 6, roof = 3;
+  const win = (x, y) => `<rect x="${x}" y="${y}" width="1.6" height="1.6" fill="#fff"/>`;
+  return `<svg viewBox="0 0 ${SC.W} ${H}" role="img" aria-label="Baum im Größenvergleich zu einem Einfamilienhaus">
+    <g fill="#c4c9c5">
+      <rect x="${hx}" y="${G - wall}" width="${hw}" height="${wall}"/>
+      <path d="M${hx - 0.5} ${G - wall} L${hx + hw / 2} ${G - wall - roof} L${hx + hw + 0.5} ${G - wall} Z"/>
+      ${win(hx + 1.5, G - 5.2)}${win(hx + 6.9, G - 5.2)}${win(hx + 1.5, G - 2.4)}
+      <rect x="${hx + 7}" y="${G - 2.6}" width="1.4" height="2.6" fill="#fff"/>
+    </g>
+    <g fill="#111">
+      <rect x="${cx - trunk / 2}" y="${top + (G - top) * 0.3}" width="${trunk}" height="${(G - top) * 0.7}"/>
+      ${crown}
+    </g>
+    <line x1="0" y1="${G}" x2="${SC.W}" y2="${G}" stroke="#888" stroke-width="0.25"/>
+    <text x="${SC.W / 2}" y="${G + 1.7}" font-size="1.5" fill="#888" text-anchor="middle">Haus ≈ 9 m</text>
+  </svg>`;
+}
+
 function jumpTo(key) {
   const v = state.visits[key]; if (!v) return;
-  $('profile').classList.add('hidden');
+  $('profile').classList.add('hidden'); $('stats').classList.add('hidden');
   map.setView([v.lat, v.lon], 19);
   openTree(treeFromVisit(v));
 }
