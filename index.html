@@ -387,29 +387,179 @@ async function shrink(file, max) {
 }
 
 let ocrWorker = null;
+// Sucht die Plakette: größte helle, kompakte Fläche (Alu-Plakette auf dunkler Rinde)
+function findPlate(img) {
+  const S = 360 / Math.max(img.width, img.height), w = Math.round(img.width * S), h = Math.round(img.height * S);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h), sat = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const r = d[i * 4], gg = d[i * 4 + 1], b = d[i * 4 + 2];
+    g[i] = 0.3 * r + 0.59 * gg + 0.11 * b; sat[i] = Math.max(r, gg, b) - Math.min(r, gg, b);
+  }
+  const sorted = Float32Array.from(g).sort();
+  const boxes = [];
+  for (const pct of [0.9, 0.8, 0.95, 0.7]) {
+    const thr = sorted[Math.floor(sorted.length * pct)];
+    const mask = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++) mask[i] = g[i] >= thr && sat[i] < 60 ? 1 : 0; // hell und grau (nicht grünes Laub)
+    // Lücken der eingeprägten Ziffern schließen
+    const m2 = new Uint8Array(w * h);
+    for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) {
+      let n = 0; for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) n += mask[(y + dy) * w + x + dx];
+      m2[y * w + x] = n >= 12 ? 1 : 0;
+    }
+    const seen = new Uint8Array(w * h), st = [];
+    for (let i = 0; i < w * h; i++) {
+      if (!m2[i] || seen[i]) continue;
+      let area = 0, x0 = w, y0 = h, x1 = 0, y1 = 0; st.push(i); seen[i] = 1;
+      while (st.length) {
+        const j = st.pop(), x = j % w, y = (j / w) | 0; area++;
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        for (const k of [j - 1, j + 1, j - w, j + w]) if (k >= 0 && k < w * h && m2[k] && !seen[k]) { seen[k] = 1; st.push(k); }
+      }
+      const bw = x1 - x0 + 1, bh = y1 - y0 + 1, fill = area / (bw * bh), asp = bw / bh;
+      if (area < w * h * 0.002 || area > w * h * 0.92 || asp < 0.5 || asp > 2.2 || fill < 0.45) continue;
+      boxes.push({ x: x0 / S, y: y0 / S, w: bw / S, h: bh / S, score: area * fill * (1 - Math.abs(Math.log(asp)) * 0.5) });
+    }
+  }
+  return boxes.sort((a, b) => b.score - a.score).slice(0, 2);
+}
+function cropVariant(img, box, mode, rot) {
+  const pad = 0.12, bx = box ? Math.max(0, box.x - box.w * pad) : 0, by = box ? Math.max(0, box.y - box.h * pad) : 0;
+  const bw = box ? Math.min(img.width - bx, box.w * (1 + 2 * pad)) : img.width, bh = box ? Math.min(img.height - by, box.h * (1 + 2 * pad)) : img.height;
+  const S = Math.min(4, 700 / Math.max(bw, bh)), W = Math.round(bw * S), H = Math.round(bh * S);
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  ctx.translate(W / 2, H / 2); ctx.rotate(rot * Math.PI / 180); ctx.translate(-W / 2, -H / 2);
+  ctx.filter = mode === 'hi' ? 'grayscale(1) contrast(2.5)' : mode === 'inv' ? 'grayscale(1) invert(1) contrast(2)' : 'grayscale(1) contrast(1.4)';
+  ctx.drawImage(img, bx, by, bw, bh, 0, 0, W, H);
+  return c;
+}
+// Binarisiert die Plakette: Ziffern schwarz, Plakette weiß, Rinde außen weiß
+function boxSum(src, w, h, r) { // Mittelwert über (2r+1)^2 per Integralbild
+  const I = new Float64Array((w + 1) * (h + 1));
+  for (let y = 0; y < h; y++) { let row = 0; for (let x = 0; x < w; x++) { row += src[y * w + x]; I[(y + 1) * (w + 1) + x + 1] = I[y * (w + 1) + x + 1] + row; } }
+  const out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const x0 = Math.max(0, x - r), y0 = Math.max(0, y - r), x1 = Math.min(w, x + r + 1), y1 = Math.min(h, y + r + 1);
+    out[y * w + x] = (I[y1 * (w + 1) + x1] - I[y0 * (w + 1) + x1] - I[y1 * (w + 1) + x0] + I[y0 * (w + 1) + x0]) / ((x1 - x0) * (y1 - y0));
+  }
+  return out;
+}
+function binarize(c, C, strokeR) {
+  const w = c.width, h = c.height, ctx = c.getContext('2d'), id = ctx.getImageData(0, 0, w, h), d = id.data;
+  const G = new Float32Array(w * h); for (let i = 0; i < w * h; i++) G[i] = 0.3 * d[i * 4] + 0.59 * d[i * 4 + 1] + 0.11 * d[i * 4 + 2];
+  // Otsu
+  const hist = new Array(256).fill(0); G.forEach(v => hist[v | 0]++);
+  let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sB = 0, wB = 0, best = 0, T = 128;
+  for (let t = 0; t < 256; t++) { wB += hist[t]; if (!wB) continue; const wF = w * h - wB; if (!wF) break; sB += t * hist[t];
+    const mB = sB / wB, mF = (sum - sB) / wF, v = wB * wF * (mB - mF) ** 2; if (v > best) { best = v; T = t; } }
+  // Plattenmaske: hell, mit großem Fenster geglättet (füllt die Ziffern)
+  const bright = new Float32Array(w * h); for (let i = 0; i < w * h; i++) bright[i] = G[i] > T ? 1 : 0;
+  const R = Math.round(Math.max(w, h) / 22), plate = boxSum(bright, w, h, R);
+  const mean = boxSum(G, w, h, Math.round(Math.max(w, h) / 18));
+  const ink = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) ink[i] = plate[i] > 0.6 && G[i] < mean[i] - C ? 1 : 0;
+  const thick = boxSum(ink, w, h, strokeR);
+  for (let i = 0; i < w * h; i++) { const v = thick[i] > 0.15 ? 0 : 255; d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255; }
+  ctx.putImageData(id, 0, 0);
+  return c;
+}
+// Behält nur ziffernartige schwarze Flecken in einer Reihe und schneidet auf diese Zeile zu
+function digitLine(c) {
+  const w = c.width, h = c.height, d = c.getContext('2d').getImageData(0, 0, w, h).data;
+  const ink = new Uint8Array(w * h); for (let i = 0; i < w * h; i++) ink[i] = d[i * 4] < 128 ? 1 : 0;
+  const lab = new Int32Array(w * h), comps = [], st = [];
+  for (let i = 0; i < w * h; i++) {
+    if (!ink[i] || lab[i]) continue;
+    const id = comps.length + 1; let x0 = w, y0 = h, x1 = 0, y1 = 0, n = 0; st.push(i); lab[i] = id;
+    while (st.length) { const j = st.pop(), x = j % w, y = (j / w) | 0; n++;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      for (const k of [j - 1, j + 1, j - w, j + w]) if (k >= 0 && k < w * h && ink[k] && !lab[k]) { lab[k] = id; st.push(k); } }
+    comps.push({ id, x0, y0, x1, y1, n, bw: x1 - x0 + 1, bh: y1 - y0 + 1 });
+  }
+  let cand = comps.filter(k => k.bh > h * 0.12 && k.bh < h * 0.75 && k.bw < w * 0.35 && k.bw / k.bh < 1.3 && k.bw / k.bh > 0.15
+    && k.n / (k.bw * k.bh) < 0.75 && k.x0 > 1 && k.y0 > 1 && k.x1 < w - 2 && k.y1 < h - 2);
+  if (!cand.length) return null;
+  // größte Gruppe ähnlich hoher Flecken auf einer Linie
+  let best = [];
+  for (const a of cand) {
+    const cy = (a.y0 + a.y1) / 2;
+    const grp = cand.filter(b => Math.abs((b.y0 + b.y1) / 2 - cy) < a.bh * 0.4 && b.bh > a.bh * 0.6 && b.bh < a.bh / 0.6);
+    if (grp.length > best.length) best = grp;
+  }
+  if (best.length < 2) return null;
+  const keep = new Set(best.map(k => k.id));
+  const X0 = Math.min(...best.map(k => k.x0)), X1 = Math.max(...best.map(k => k.x1)), Y0 = Math.min(...best.map(k => k.y0)), Y1 = Math.max(...best.map(k => k.y1));
+  const dh = Y1 - Y0 + 1, S = 70 / dh, pad = Math.round(dh * 0.4);
+  const o = document.createElement('canvas'); o.width = Math.round((X1 - X0 + 1 + 2 * pad) * S); o.height = Math.round((dh + 2 * pad) * S);
+  const t = document.createElement('canvas'); t.width = X1 - X0 + 1 + 2 * pad; t.height = dh + 2 * pad;
+  const tctx = t.getContext('2d'), tid = tctx.createImageData(t.width, t.height);
+  for (let y = 0; y < t.height; y++) for (let x = 0; x < t.width; x++) {
+    const sx = x + X0 - pad, sy = y + Y0 - pad, on = sx >= 0 && sy >= 0 && sx < w && sy < h && keep.has(lab[sy * w + sx]);
+    const i = (y * t.width + x) * 4; tid.data[i] = tid.data[i + 1] = tid.data[i + 2] = on ? 0 : 255; tid.data[i + 3] = 255;
+  }
+  tctx.putImageData(tid, 0, 0);
+  const octx = o.getContext('2d'); octx.imageSmoothingEnabled = true; octx.drawImage(t, 0, 0, o.width, o.height);
+  return o;
+}
 async function ocr(file) {
   if (!ocrWorker) {
     ocrWorker = await Tesseract.createWorker('eng');
     await ocrWorker.setParameters({ tessedit_char_whitelist: '0123456789' });
   }
-  // Graustufen + Kontrast für bessere Erkennung
   const img = await createImageBitmap(file);
-  const s = Math.min(1, 1400 / Math.max(img.width, img.height));
-  const c = document.createElement('canvas'); c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
-  const ctx = c.getContext('2d'); ctx.filter = 'grayscale(1) contrast(1.6)'; ctx.drawImage(img, 0, 0, c.width, c.height);
-  const { data } = await ocrWorker.recognize(c);
-  const found = (data.text.match(/\d+/g) || []).map(normNum).filter(Boolean);
-  console.log('OCR:', data.text, found);
-  return [...new Set(found)];
+  const plates = findPlate(img);
+  const tries = [];
+  for (const rot of [0, -10, 10, -45, 45]) {
+    for (const box of plates) for (const mode of ['bin1', 'bin2', 'hi']) tries.push({ box, rot, mode });
+    if (rot === 0) tries.push({ box: null, rot, mode: 'bin1' }, { box: null, rot, mode: 'bin2' });
+  }
+  const t0 = performance.now();
+  const votes = {};
+  for (const tr of tries) {
+    if (performance.now() - t0 > 9000) break; // höchstens ca. 9 s
+    let cv = tr.mode.startsWith('bin') ? binarize(cropVariant(img, tr.box, 'norm', tr.rot), tr.mode === 'bin1' ? 12 : 22, tr.mode === 'bin1' ? 2 : 3) : cropVariant(img, tr.box, tr.mode, tr.rot);
+    if (tr.mode.startsWith('bin')) { cv = digitLine(cv); if (!cv) continue; }
+    for (const psm of ['7', '8']) {
+      await ocrWorker.setParameters({ tessedit_pageseg_mode: psm });
+      const { data } = await ocrWorker.recognize(cv);
+      for (const wd of data.words || []) {
+        const n = normNum(wd.text);
+        if (n.length >= 2 && n.length <= 6 && wd.confidence >= 40) votes[n] = (votes[n] || 0) + wd.confidence;
+      }
+    }
+    const best = Object.entries(votes).sort((a, b) => b[1] - a[1])[0];
+    if (best && best[1] >= 240) break; // sicher genug erkannt
+  }
+  const found = Object.entries(votes).sort((a, b) => b[1] - a[1]).map(([n]) => n);
+  console.log('OCR:', votes);
+  return found.slice(0, 5);
 }
 
+function editDist(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++)
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+const isSubseq = (s, t) => { let i = 0; for (const ch of t) if (ch === s[i]) i++; return i === s.length; };
+// Vergleicht die gelesenen Nummern mit den Bäumen in der Nähe. Kleine Lesefehler (1 Ziffer falsch,
+// oder bis zu 2 Ziffern übersehen) werden akzeptiert, wenn genau EIN Baum in der Nähe passt.
 function matchNumber(t, numbers) {
   if (!numbers.length) return null;
-  if (numbers.includes(normNum(t.props.BAUMNUMMER))) return t;
   const ref = me ? me.latlng : t.latlng;
-  for (const other of trees.values()) {
-    if (other === t || state.visits[other.key]) continue;
-    if (dist(ref, other.latlng) <= CFG.matchRadius && numbers.includes(normNum(other.props.BAUMNUMMER))) return other;
+  const near = [t, ...[...trees.values()].filter(o => o !== t && !state.visits[o.key] && dist(ref, o.latlng) <= CFG.matchRadius)];
+  for (const n of numbers) { const hit = near.find(o => normNum(o.props.BAUMNUMMER) === n); if (hit) return hit; }
+  for (const n of numbers) {
+    if (n.length < 3) continue;
+    const fits = near.filter(o => { const b = normNum(o.props.BAUMNUMMER);
+      return editDist(n, b) <= 1 || (b.length - n.length <= 2 && b.length > n.length && isSubseq(n, b)); });
+    if (fits.length === 1) return fits[0];
   }
   return null;
 }
@@ -417,6 +567,7 @@ function matchNumber(t, numbers) {
 function ocrFailed(t, numbers) {
   $('sheet').innerHTML = `<button class="close" onclick="openTree(selected)">×</button>
     <h2>Plakette nicht erkannt</h2>
+    <div class="small">Tipp: Plakette möglichst groß, scharf und ohne Gegenlicht fotografieren – sie sollte etwa ein Drittel des Bildes füllen.</div>
     <div class="meta">${numbers.length ? 'Gelesen: ' + esc(numbers.join(', ')) + ' – passt zu keinem Baum in der Nähe.' : 'Es wurde keine Nummer gelesen.'}</div>
     <button class="btn" onclick="startCam('ocr')">📷 Nochmal versuchen</button>
     <button class="btn sec" onclick="planB(true)">Plakette geht nicht (Foto verwenden)</button>`;
