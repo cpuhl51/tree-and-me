@@ -44,7 +44,7 @@
   #liveMsg { position:absolute; left:16px; right:16px; top:calc(42% + min(32vw,180px) + 16px); color:#fff; text-align:center; font-size:15px; }
   #liveBar { position:absolute; left:16px; right:16px; bottom:calc(24px + env(safe-area-inset-bottom)); display:flex; gap:10px; }
   #liveBar .btn { margin:0; }
-  #info { z-index:1200; }
+  #info, #settings { z-index:1200; }
   #outside { position:fixed; left:12px; right:12px; bottom:calc(20px + env(safe-area-inset-bottom)); z-index:950; background:#fff; border:2px solid #1a5fd0; border-radius:14px; padding:14px 16px; font-size:15px; line-height:1.4; box-shadow:0 2px 10px rgba(0,0,0,.25); }
   #outside b { color:#1a5fd0; }
   .arrow-ic { background:none; border:0; }
@@ -123,6 +123,7 @@
 <input type="file" id="avInput" accept="image/*" hidden>
 <div id="profile" class="panel hidden"></div>
 <div id="info" class="panel hidden"></div>
+<div id="settings" class="panel hidden"></div>
 <div id="cropper" class="hidden">
   <div style="color:#fff;font-size:15px">Bild verschieben und zoomen</div>
   <div id="cropBox"><canvas id="cropCv" width="560" height="560" style="width:280px;height:280px"></canvas></div>
@@ -145,7 +146,10 @@ const CFG = {
   ma42Mail: 'post@ma42.wien.gv.at',
   sagsWienPkg: 'at.gv.wien.sagswien.app.droid',
   api: '', // Adresse der Server-Schnittstelle, z. B. 'api/' – leer = noch kein Server, Meldungen werden vorgemerkt
-  googleClientId: '' // aus der Google Cloud Console (Google Auth Platform → Clients) eintragen
+  googleClientId: '',
+  // OneDrive-Sicherung: Anwendungs-ID aus Microsoft Entra (App-Registrierung, Plattform „Single-Page-Anwendung“)
+  oneDriveClientId: '',
+  oneDriveScope: 'Files.ReadWrite.AppFolder User.Read offline_access' // aus der Google Cloud Console (Google Auth Platform → Clients) eintragen
 };
 
 // ---------- Speicher ----------
@@ -155,7 +159,7 @@ function loadState() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || freshState(); } catch { return freshState(); }
 }
 function freshState() { return { visits: {}, districts: [] }; }
-function saveState() { localStorage.setItem(STORE_KEY, JSON.stringify(state)); renderPoints(); }
+function saveState() { localStorage.setItem(STORE_KEY, JSON.stringify(state)); renderPoints(); if (typeof odSchedule === 'function') odSchedule(); }
 
 function idb() {
   return new Promise((res, rej) => {
@@ -166,7 +170,8 @@ function idb() {
 }
 async function putPhoto(key, blob) {
   const db = await idb();
-  return new Promise((res, rej) => { const tx = db.transaction('photos', 'readwrite'); tx.objectStore('photos').put(blob, key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+  await new Promise((res, rej) => { const tx = db.transaction('photos', 'readwrite'); tx.objectStore('photos').put(blob, key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+  if (typeof odSchedule === 'function') odSchedule();
 }
 async function getPhoto(key) {
   const db = await idb();
@@ -927,6 +932,7 @@ $('btnStats').onclick = () => {
     <div class="small">Zahlen rechts: deine Bäume / zugängliche Bäume in Wien. Die Rangliste kommt mit dem Server.</div>
     <button class="btn sec" onclick="openInfo()">ℹ️ Spielregeln & Infos zu den Bäumen</button>
     <h3>Sicherung</h3>
+    <button class="btn sec" onclick="openSettings()">☁️ Automatisch in OneDrive sichern</button>
     <button class="btn sec" onclick="exportData()">Besuche exportieren (JSON)</button>
     <button class="btn sec" onclick="$('importFile').click()">Besuche importieren</button>
     <input type="file" id="importFile" accept="application/json" hidden onchange="importData(this.files[0])">
@@ -1083,7 +1089,7 @@ function updateDistance() {
   $('warnRange').classList.toggle('hidden', ok);
 }
 
-// ---------- Fotos in die Cloud (über das Teilen-Menü) ----------
+// ---------- Fotos ----------
 const PHOTO_KIND = {
   selfie: { label: '🤳 Selfie', consent: 'Auf meiner Profilseite für andere Spieler zeigen' },
   tree:   { label: '📷 Baum-Doku', consent: 'In der Baum-Doku für andere Spieler zeigen' }
@@ -1096,7 +1102,6 @@ async function renderPhotoList(v) {
     html += `<div style="margin-top:12px">
       <div class="small">${PHOTO_KIND[ph.kind].label} · ${fmtDate(ph.ts)}</div>
       ${b ? `<img class="thumb" src="${URL.createObjectURL(b)}" alt="">` : ''}
-      <button class="btn sec" onclick="saveToCloud('${esc(ph.id)}')">☁️ In Cloud speichern (z. B. OneDrive)</button>
       <label class="chk"><input type="checkbox" ${ph.public ? 'checked' : ''} onchange="setPublic('${esc(ph.id)}', this.checked)"> ${PHOTO_KIND[ph.kind].consent} (Upload, sobald es den Server gibt)</label>
       <button class="btn ghost" onclick="deletePhoto('${esc(ph.id)}')">Foto löschen</button></div>`;
   }
@@ -1106,18 +1111,6 @@ function findPhoto(id) {
   for (const v of Object.values(state.visits)) { const ph = (v.photos || []).find(x => x.id === id); if (ph) return { v, ph }; }
   return {};
 }
-async function saveToCloud(id) {
-  const { v, ph } = findPhoto(id); if (!ph) return;
-  const blob = await getPhoto(id); if (!blob) return toast('Kein Foto gefunden');
-  const name = `tree-and-me_${ph.ts.slice(0, 10)}_${ph.kind === 'selfie' ? 'selfie' : 'baum'}_${v.bezirk}-bezirk_nr-${normNum(v.nummer)}.jpg`;
-  const file = new File([blob], name, { type: 'image/jpeg' });
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'Tree and me' }); } catch (e) { /* abgebrochen */ }
-  } else {
-    const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; a.click();
-    toast('Foto heruntergeladen');
-  }
-}
 function setPublic(id, on) {
   const { ph } = findPhoto(id); if (!ph) return;
   ph.public = on; saveState();
@@ -1125,7 +1118,9 @@ function setPublic(id, on) {
 }
 async function deletePhoto(id) {
   const { v } = findPhoto(id); if (!v || !confirm('Foto wirklich löschen?')) return;
-  v.photos = v.photos.filter(x => x.id !== id); saveState();
+  v.photos = v.photos.filter(x => x.id !== id);
+  (state.geloeschteFotos = state.geloeschteFotos || []).push(id); // auch in OneDrive löschen
+  saveState();
   const db = await idb(); db.transaction('photos', 'readwrite').objectStore('photos').delete(id);
   if (selected) openTree(selected);
 }
@@ -1200,6 +1195,7 @@ async function openProfile(first) {
     <input class="txt" id="nameIn" maxlength="20" placeholder="z. B. Baumfreund22" value="${esc(pr.name || '')}">
     <div class="small">3–20 Zeichen: Buchstaben, Ziffern, _ und -</div>
     <button class="btn" onclick="saveProfile()">Speichern</button>
+    ${first ? '' : '<button class="btn sec" onclick="openSettings()">⚙️ Einstellungen (OneDrive-Sicherung)</button>'}
     ${first ? '' : '<h3>Meine Selfies</h3><div id="mySelfies" class="small">Noch keine Selfies.</div><h3>Meine Bäume</h3><div id="myTrees" class="vlist"></div>'}`;
   $('profile').classList.remove('hidden');
   if (!pr.google) renderGoogleButton();
@@ -1273,6 +1269,162 @@ $('cropOk').onclick = async () => {
   if ($('avPrev')) $('avPrev').innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="">`;
   renderMe();
 };
+
+// ---------- OneDrive: Fotos und Spielstand automatisch sichern und zwischen Geräten abgleichen ----------
+// Anmeldung per OAuth 2.0 mit PKCE direkt im Browser (kein Server nötig). Microsoft gibt Web-Apps
+// eine Anmeldung für höchstens 24 Stunden; danach einmal „Neu verbinden“.
+// Ablage im App-Ordner von OneDrive (Apps › Tree and me): fotos/…jpg und daten/tree-and-me.json
+const OD_AUTH = 'https://login.microsoftonline.com/common/oauth2/v2.0/';
+const OD_ROOT = 'https://graph.microsoft.com/v1.0/me/drive/special/approot:';
+const odState = () => { try { return JSON.parse(localStorage.getItem('tam_od')); } catch (e) { return null; } };
+const odSave = s => s ? localStorage.setItem('tam_od', JSON.stringify(s)) : localStorage.removeItem('tam_od');
+const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const odRedirect = () => location.origin + location.pathname;
+async function odConnect() {
+  if (!CFG.oneDriveClientId) return toast('OneDrive wird gerade eingerichtet');
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
+  const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+  const st = b64url(crypto.getRandomValues(new Uint8Array(16)));
+  sessionStorage.setItem('tam_od_pkce', JSON.stringify({ verifier, st }));
+  location.href = OD_AUTH + 'authorize?' + new URLSearchParams({ client_id: CFG.oneDriveClientId, response_type: 'code', response_mode: 'query',
+    redirect_uri: odRedirect(), scope: CFG.oneDriveScope, code_challenge: challenge, code_challenge_method: 'S256', state: st });
+}
+async function odTokenRequest(params) {
+  const r = await fetch(OD_AUTH + 'token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: CFG.oneDriveClientId, scope: CFG.oneDriveScope, redirect_uri: odRedirect(), ...params }) });
+  const j = await r.json(); if (!r.ok) throw new Error(j.error_description || j.error || r.status);
+  return j;
+}
+async function odHandleRedirect() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has('code') && !q.has('error')) return;
+  let pk = null; try { pk = JSON.parse(sessionStorage.getItem('tam_od_pkce')); } catch (e) {}
+  sessionStorage.removeItem('tam_od_pkce'); history.replaceState(null, '', location.pathname);
+  if (q.has('error')) return toast('OneDrive: ' + (q.get('error_description') || q.get('error')), 5000);
+  if (!pk || pk.st !== q.get('state')) return;
+  try {
+    const j = await odTokenRequest({ grant_type: 'authorization_code', code: q.get('code'), code_verifier: pk.verifier });
+    const s = { access: j.access_token, exp: Date.now() + (j.expires_in - 60) * 1000, refresh: j.refresh_token, rexp: Date.now() + 23.5 * 3600e3, last: (odState() || {}).last };
+    try { const me = await (await fetch('https://graph.microsoft.com/v1.0/me', { headers: { Authorization: 'Bearer ' + s.access } })).json(); s.user = me.userPrincipalName || me.mail || me.displayName; } catch (e) {}
+    odSave(s); toast('OneDrive verbunden – Fotos werden gesichert', 4000);
+    openSettings(); odSync();
+  } catch (e) { toast('OneDrive-Verbindung fehlgeschlagen: ' + e.message, 5000); }
+}
+async function odToken() {
+  const s = odState(); if (!s) return null;
+  if (Date.now() < s.exp) return s.access;
+  if (!s.refresh || Date.now() > s.rexp) { s.expired = true; odSave(s); return null; }
+  try {
+    const j = await odTokenRequest({ grant_type: 'refresh_token', refresh_token: s.refresh });
+    Object.assign(s, { access: j.access_token, exp: Date.now() + (j.expires_in - 60) * 1000, refresh: j.refresh_token || s.refresh, expired: false });
+    odSave(s); return s.access;
+  } catch (e) { s.expired = true; odSave(s); return null; }
+}
+async function odFetch(path, opt = {}) {
+  const t = await odToken(); if (!t) throw new Error('OneDrive nicht verbunden');
+  const r = await fetch(OD_ROOT + path, { ...opt, headers: { ...(opt.headers || {}), Authorization: 'Bearer ' + t } });
+  if (!r.ok && r.status !== 404) throw new Error('OneDrive ' + r.status);
+  return r;
+}
+async function photoKeys() {
+  const db = await idb();
+  return new Promise((res, rej) => { const r = db.transaction('photos').objectStore('photos').getAllKeys(); r.onsuccess = () => res(r.result.map(String)); r.onerror = () => rej(r.error); });
+}
+function hash6(str) { let h = 2166136261; for (const c of str) { h ^= c.codePointAt(0); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16).padStart(8, '0').slice(0, 6); }
+// lesbarer, eindeutiger Dateiname, z. B. 2026-11-08_selfie_22-bezirk_nr-66_a1b2c3.jpg
+function fotoName(key) {
+  if (key === 'avatar') return 'avatar.jpg';
+  const m = key.match(/^(\w+):(.*?)(?::(\d{4}-\d\d-\d\dT.*))?$/) || [];
+  const kind = m[1] || 'foto', v = state.visits[m[2]] || {};
+  const art = { selfie: 'selfie', tree: 'baum', scan: 'beweis' }[kind] || kind;
+  return `${(m[3] || v.ts || '').slice(0, 10) || 'foto'}_${art}_${v.bezirk || 'x'}-bezirk_nr-${normNum(v.nummer) || 'x'}_${hash6(key)}.jpg`;
+}
+function mergeRemote(r) {
+  const gone = new Set(state.geloeschteFotos || []);
+  for (const [k, rv] of Object.entries(r.visits || {})) {
+    const lv = state.visits[k];
+    if (!lv) { state.visits[k] = rv; continue; }
+    const ids = new Set((lv.photos || []).map(p => p.id));
+    for (const p of rv.photos || []) if (!ids.has(p.id) && !gone.has(p.id)) (lv.photos = lv.photos || []).push(p);
+  }
+  state.districts = [...new Set([...(state.districts || []), ...(r.districts || [])])];
+  state.korrekturen = Object.assign({}, r.korrekturen || {}, state.korrekturen || {});
+  state.profile = state.profile || {};
+  if (!state.profile.name && r.profile && r.profile.name) state.profile.name = r.profile.name;
+  if (r.profile && r.profile.hasAvatar) state.profile.hasAvatar = true;
+}
+let odBusy = false, odTimer = null;
+function odSchedule() { if (!odState() || odState().expired) return; clearTimeout(odTimer); odTimer = setTimeout(odSync, 4000); }
+async function odSync() {
+  if (odBusy || !odState() || !navigator.onLine) return;
+  odBusy = true; odStatus('Synchronisiere …');
+  try {
+    if (!(await odToken())) return;
+    let remote = null;
+    const rr = await odFetch('/daten/tree-and-me.json:/content');
+    if (rr.status !== 404) remote = await rr.json();
+    if (remote) mergeRemote(remote);
+    const manifest = Object.assign({}, (remote && remote.fotos) || {});
+    const done = new Set(JSON.parse(localStorage.getItem('tam_od_done') || '[]'));
+    let local = new Set(await photoKeys());
+    // auf einem anderen Gerät gelöschte Fotos auch hier entfernen
+    if (remote) for (const key of local) if (done.has(key) && !manifest[fotoName(key)]) {
+      const db = await idb(); db.transaction('photos', 'readwrite').objectStore('photos').delete(key);
+      for (const v of Object.values(state.visits)) if (v.photos) v.photos = v.photos.filter(p => p.id !== key);
+      done.delete(key); local.delete(key);
+    }
+    // hier gelöschte Fotos in OneDrive entfernen
+    for (const key of state.geloeschteFotos || []) { delete manifest[fotoName(key)]; await odFetch('/fotos/' + fotoName(key), { method: 'DELETE' }); done.delete(key); }
+    state.geloeschteFotos = [];
+    // Fotos von anderen Geräten holen
+    for (const [name, key] of Object.entries(manifest)) if (!local.has(key)) {
+      const d = await odFetch('/fotos/' + name + ':/content');
+      if (d.ok) {
+        const blob = await d.blob(), db = await idb();
+        await new Promise(res => { const tx = db.transaction('photos', 'readwrite'); tx.objectStore('photos').put(blob, key); tx.oncomplete = res; });
+        done.add(key); local.add(key);
+      }
+    }
+    // neue Fotos hochladen
+    for (const key of await photoKeys()) {
+      manifest[fotoName(key)] = key;
+      if (done.has(key)) continue;
+      odStatus('Lade Fotos hoch …');
+      await odFetch('/fotos/' + fotoName(key) + ':/content', { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: await getPhoto(key) });
+      done.add(key); localStorage.setItem('tam_od_done', JSON.stringify([...done]));
+    }
+    localStorage.setItem('tam_od_done', JSON.stringify([...done]));
+    const out = { version: 1, stand: new Date().toISOString(), visits: state.visits, districts: state.districts, korrekturen: state.korrekturen || {},
+      profile: { name: (state.profile || {}).name, hasAvatar: !!(state.profile || {}).hasAvatar }, fotos: manifest };
+    await odFetch('/daten/tree-and-me.json:/content', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(out) });
+    localStorage.setItem(STORE_KEY, JSON.stringify(state)); renderPoints(); refreshMarkers(); renderMe();
+    const s = odState(); s.last = new Date().toISOString(); odSave(s);
+  } catch (e) { console.warn('OneDrive', e); toast('OneDrive-Sicherung: ' + e.message); }
+  finally { odBusy = false; odStatus(); }
+}
+function odStatus(txt) { const el = $('odStatus'); if (el) el.textContent = txt || odLine(); }
+function odLine() {
+  const s = odState(); if (!s) return '';
+  return s.expired ? 'Verbindung abgelaufen – bitte neu verbinden.' : `Verbunden${s.user ? ' als ' + s.user : ''} · zuletzt gesichert: ${s.last ? new Date(s.last).toLocaleString('de-AT', { dateStyle: 'short', timeStyle: 'short' }) : 'noch nie'}`;
+}
+function odDisconnect() {
+  if (!confirm('OneDrive trennen? Deine Fotos bleiben in OneDrive und auf diesem Gerät.')) return;
+  odSave(null); localStorage.removeItem('tam_od_done'); openSettings();
+}
+function openSettings() {
+  const s = odState();
+  $('settings').innerHTML = `<button class="close" onclick="$('settings').classList.add('hidden')">×</button>
+    <h2>Einstellungen</h2>
+    <h3>☁️ Fotos & Spielstand in OneDrive sichern</h3>
+    <p style="font-size:14px">Alle Fotos der App (Selfies, Baum-Doku, Beweisfotos, Avatar) und dein Spielstand werden <b>automatisch</b> in deinem OneDrive gesichert – im eigenen App-Ordner <b>„Apps › Tree and me“</b>. Verbindest du ein zweites Gerät mit demselben Microsoft-Konto, wird alles zusammengeführt.</p>
+    ${!CFG.oneDriveClientId ? '<div class="warn">OneDrive wird gerade eingerichtet.</div>'
+      : !s ? '<button class="btn" onclick="odConnect()">Mit OneDrive verbinden</button>'
+      : `<div class="${s.expired ? 'warn' : 'ok'}" id="odStatus">${esc(odLine())}</div>
+         ${s.expired ? '<button class="btn" onclick="odConnect()">Neu verbinden</button>' : '<button class="btn sec" onclick="odSync()">Jetzt synchronisieren</button>'}
+         <button class="btn ghost" onclick="odDisconnect()">OneDrive trennen</button>`}
+    <p class="small">Die App sieht nur ihren eigenen Ordner, nicht deine übrigen Dateien. Microsoft erlaubt Web-Apps eine Anmeldung für höchstens 24 Stunden – danach einmal „Neu verbinden“; bis dahin bleibt alles auf dem Handy und wird nachgeholt. Die Fotos bleiben zusätzlich auf diesem Gerät.</p>`;
+  $('settings').classList.remove('hidden');
+}
 
 // ---------- Mit Google anmelden ----------
 function renderGoogleButton(tries = 0) {
@@ -1365,6 +1517,11 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 renderPoints();
 renderMe();
 sendKorrekturen();
+odHandleRedirect().then(() => {
+  const s = odState();
+  if (s && !s.expired) odSync();
+  else if (s && s.expired) toast('OneDrive-Sicherung pausiert – in den Einstellungen neu verbinden', 4500);
+});
 refreshMarkers();
 checkReturnedReport();
 if (!state.profile || !state.profile.name) openProfile(true);
