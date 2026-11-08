@@ -104,7 +104,7 @@
 </div>
 <button id="subsetChip" class="hidden" onclick="clearSubset()"></button>
 <div id="fab">
-  <label><input type="checkbox" id="testMode"> Testmodus</label>
+  <label><input type="checkbox" id="testMode" autocomplete="off"> Testmodus</label>
   <button id="btnLocate">◎ Mein Standort</button>
 </div>
 <div id="sheet" class="sheet hidden"></div>
@@ -388,15 +388,28 @@ function setMe(latlng, acc) {
   } else { meMarker.setLatLng(latlng); accCircle.setLatLng(latlng).setRadius(acc); }
   updateDistance(); // nur Abstand + Knöpfe aktualisieren, Fenster nicht neu aufbauen
 }
-let firstFix = true;
-if ('geolocation' in navigator) {
-  navigator.geolocation.watchPosition(pos => {
-    if ($('testMode').checked) return;
-    setMe(L.latLng(pos.coords.latitude, pos.coords.longitude), pos.coords.accuracy);
-    const away = checkOutside(me.latlng);
-    if (firstFix) { firstFix = false; if (!away) map.setView(me.latlng, 18); }
-  }, err => toast('Kein GPS: ' + err.message + ' – Testmodus nutzen'), { enableHighAccuracy: true, maximumAge: 5000 });
+// Start: sofort zur zuletzt bekannten Position, dann zur schnellen Netzwerk-Ortung, dann zum genauen GPS
+let firstFix = true, userMoved = false;
+map.on('dragstart', () => { userMoved = true; });
+try {
+  const last = JSON.parse(localStorage.getItem('tam_lastpos'));
+  if (last && inWien(L.latLng(last[0], last[1]))) map.setView(last, 17);
+} catch (e) {}
+function onPosition(pos, precise) {
+  if ($('testMode').checked) return;
+  const ll = L.latLng(pos.coords.latitude, pos.coords.longitude);
+  setMe(ll, pos.coords.accuracy);
+  const away = checkOutside(ll);
+  try { localStorage.setItem('tam_lastpos', JSON.stringify([+ll.lat.toFixed(5), +ll.lng.toFixed(5)])); } catch (e) {}
+  if (firstFix && !away && !userMoved) map.setView(ll, precise ? 18 : 17);
+  if (precise) firstFix = false;
 }
+if ('geolocation' in navigator) {
+  navigator.geolocation.getCurrentPosition(p => { if (firstFix) onPosition(p, false); }, () => {}, { enableHighAccuracy: false, maximumAge: 600000, timeout: 8000 });
+  navigator.geolocation.watchPosition(p => onPosition(p, true),
+    err => toast('Kein GPS: ' + err.message + ' – Testmodus nutzen'), { enableHighAccuracy: true, maximumAge: 5000 });
+}
+$('testMode').checked = false;
 $('btnLocate').onclick = () => { if (me) map.setView(me.latlng, 18); else toast('Noch kein Standort'); };
 $('testMode').onchange = e => { if (e.target.checked) hideOutside(); else if (me && !$('testMode').checked) checkOutside(me.latlng); toast(e.target.checked ? 'Testmodus: Tippe auf einen Baum – du stehst dann direkt davor' : 'Testmodus aus – GPS aktiv'); };
 map.on('click', e => { if ($('testMode').checked) { setMe(e.latlng, 5); checkOutside(e.latlng); } });
