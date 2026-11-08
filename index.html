@@ -1015,17 +1015,21 @@ function mailReport(r) {
   const subject = `Meldung zu Baum Nr. ${p.BAUMNUMMER}, ${p.OBJEKT_STRASSE} (${p.BEZIRK}. Bezirk)`;
   location.href = `mailto:${CFG.ma42Mail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(reportText(r))}`;
 }
+// Chrome lässt Webseiten nur Apps öffnen, die dafür einen Link-Eingang haben (BROWSABLE).
+// Sag's Wien hat (vermutlich) keinen – darum öffnen wir die Play-Store-Seite der App, dort steht „Öffnen“.
 async function reportTree() {
   const t = selected; if (!t) return;
   const r = reportData(t);
   if (!/Android/i.test(navigator.userAgent)) return mailReport(r);
-  // Android: Sag's Wien öffnen; ist die App nicht installiert, kommt Chrome zurück auf diese Seite (?meldung=1)
-  localStorage.setItem('tam_report', JSON.stringify(r));
-  try { await navigator.clipboard.writeText(reportText(r)); toast('Baumdaten kopiert – in Sag\'s Wien einfügen', 4000); } catch (e) {}
-  const back = location.origin + location.pathname + '?meldung=1';
-  setTimeout(() => {
-    location.href = `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${CFG.sagsWienPkg};S.browser_fallback_url=${encodeURIComponent(back)};end`;
-  }, 600);
+  let copied = false;
+  try { await navigator.clipboard.writeText(reportText(r)); copied = true; } catch (e) {}
+  $('sheet').innerHTML = `<button class="close" onclick="openTree(selected)">×</button>
+    <h2>Meldung über Sag's Wien</h2>
+    <div class="meta">${copied ? '✔ Die Baumdaten sind kopiert – in Sag\'s Wien bei der Beschreibung einfügen (lange tippen → Einfügen).' : 'Notiere die Baumnummer ' + esc(r.props.BAUMNUMMER) + ' für die Beschreibung.'}</div>
+    <a class="btn" style="text-align:center;text-decoration:none" href="https://play.google.com/store/apps/details?id=${CFG.sagsWienPkg}" target="_blank" rel="noopener">Sag's Wien öffnen</a>
+    <div class="small" style="margin-top:6px">Es öffnet sich der Play Store – dort auf „Öffnen“ tippen. In Sag's Wien die Kategorie „Grünflächen“ wählen.</div>
+    <button class="btn ghost" id="btnMailInstead">📧 Lieber per Mail melden</button>`;
+  $('btnMailInstead').onclick = () => mailReport(r);
 }
 function checkReturnedReport() {
   const q = new URLSearchParams(location.search);
