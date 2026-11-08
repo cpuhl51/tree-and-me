@@ -25,7 +25,34 @@
     "viadonau - DHK Donaukanal Pachtflächen",
     "Test"
   ],
-  "nadel_gattungen": ["pinus","picea","abies","taxus","thuja","juniperus","cedrus","larix","metasequoia","pseudotsuga","sequoiadendron","sequoia","taxodium","chamaecyparis","cupressus","cryptomeria","tsuga","platycladus","sciadopitys","cupressocyparis","calocedrus","x cupressocyparis","cephalotaxus","araucaria","microbiota","thujopsis"],
+  "nadel_gattungen": [
+    "pinus",
+    "picea",
+    "abies",
+    "taxus",
+    "thuja",
+    "juniperus",
+    "cedrus",
+    "larix",
+    "metasequoia",
+    "pseudotsuga",
+    "sequoiadendron",
+    "sequoia",
+    "taxodium",
+    "chamaecyparis",
+    "cupressus",
+    "cryptomeria",
+    "tsuga",
+    "platycladus",
+    "sciadopitys",
+    "cupressocyparis",
+    "calocedrus",
+    "x cupressocyparis",
+    "cephalotaxus",
+    "araucaria",
+    "microbiota",
+    "thujopsis"
+  ],
   "obst_essbar": [
     "^Malus domestica",
     "^Pyrus communis(?! 'Beech Hill')",
@@ -42,5 +69,21 @@
     "^Cornus mas",
     "^Sambucus nigra",
     "^Amelanchier"
-  ]
+  ],
+  "obst_beschreibung": [
+    "Kultur-Apfel (Malus domestica)",
+    "Birne (Pyrus communis)",
+    "Vogel- und Süßkirsche (Prunus avium, ohne gefüllt blühende Sorten)",
+    "Sauerkirsche, Zwetschke/Pflaume, Kirschpflaume und Blutpflaume, Marille, Pfirsich, Mandel, Schlehe",
+    "Walnuss und Schwarznuss",
+    "Edelkastanie (Maroni)",
+    "Baumhasel und Haselnuss",
+    "Maulbeere (ohne die fruchtlose Sorte)",
+    "Quitte, Mispel, Feige",
+    "Speierling und Elsbeere",
+    "Dirndl (Kornelkirsche)",
+    "Schwarzer Holunder (Beeren nur gekocht essen)",
+    "Felsenbirne"
+  ],
+  "zier_beschreibung": "Zieräpfel, Zierbirnen (z. B. 'Chanticleer'), japanische Blütenkirschen, gefüllt blühende Kirschen, Traubenkirschen, Mehl- und Vogelbeeren gelten als Laubbaum – ihre Früchte sind ungenießbar, sehr klein oder roh unbekömmlich."
 }

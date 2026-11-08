@@ -44,6 +44,7 @@
   #liveMsg { position:absolute; left:16px; right:16px; top:calc(42% + min(32vw,180px) + 16px); color:#fff; text-align:center; font-size:15px; }
   #liveBar { position:absolute; left:16px; right:16px; bottom:calc(24px + env(safe-area-inset-bottom)); display:flex; gap:10px; }
   #liveBar .btn { margin:0; }
+  #info { z-index:1200; }
   #outside { position:fixed; left:12px; right:12px; bottom:calc(20px + env(safe-area-inset-bottom)); z-index:950; background:#fff; border:2px solid #1a5fd0; border-radius:14px; padding:14px 16px; font-size:15px; line-height:1.4; box-shadow:0 2px 10px rgba(0,0,0,.25); }
   #outside b { color:#1a5fd0; }
   .arrow-ic { background:none; border:0; }
@@ -121,6 +122,7 @@
 <input type="file" id="camInput" accept="image/*" capture="environment" hidden>
 <input type="file" id="avInput" accept="image/*" hidden>
 <div id="profile" class="panel hidden"></div>
+<div id="info" class="panel hidden"></div>
 <div id="cropper" class="hidden">
   <div style="color:#fff;font-size:15px">Bild verschieben und zoomen</div>
   <div id="cropBox"><canvas id="cropCv" width="560" height="560" style="width:280px;height:280px"></canvas></div>
@@ -142,6 +144,7 @@ const CFG = {
   reportWorkdays: 3,
   ma42Mail: 'post@ma42.wien.gv.at',
   sagsWienPkg: 'at.gv.wien.sagswien.app.droid',
+  api: '', // Adresse der Server-Schnittstelle, z. B. 'api/' – leer = noch kein Server, Meldungen werden vorgemerkt
   googleClientId: '' // aus der Google Cloud Console (Google Auth Platform → Clients) eintragen
 };
 
@@ -191,15 +194,16 @@ const normNum = s => String(s ?? '').replace(/\D/g, '').replace(/^0+/, '');
 
 // ---------- Baum-Kategorien ----------
 // Regeln (zugänglich / Nadel / essbares Obst) und Wien-Statistik kommen aus regeln.json und stats.json
-let RULES = { closed: new Set(), nadel: new Set(), essbar: [] }, STATS = null;
+let RULES = { closed: new Set(), nadel: new Set(), essbar: [], raw: null }, STATS = null;
+const OVERRIDES = new Map(); // vom Server bestätigte Korrekturen anderer Spieler: baum_id -> {zugang, obst}
 const rulesReady = (async () => {
   try {
     const r = await (await fetch('regeln.json', { cache: 'no-cache' })).json();
-    RULES = { closed: new Set(r.nicht_zugaenglich), nadel: new Set(r.nadel_gattungen), essbar: r.obst_essbar.map(p => new RegExp(p)) };
+    RULES = { closed: new Set(r.nicht_zugaenglich), nadel: new Set(r.nadel_gattungen), essbar: r.obst_essbar.map(p => new RegExp(p)), raw: r };
   } catch (e) { console.warn('Regeln nicht geladen', e); }
   try { STATS = await (await fetch('stats.json', { cache: 'no-cache' })).json(); } catch (e) { console.warn('Statistik nicht geladen', e); }
   // gespeicherte Besuche mit den aktuellen Regeln neu einordnen
-  for (const v of Object.values(state.visits)) v.kat = category(v.art);
+  for (const v of Object.values(state.visits)) v.kat = kategorie(treeFromVisit(v));
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
   setTimeout(() => { // Karten-Symbole mit den neuen Regeln neu zeichnen
     for (const [k, m] of visitedMarkers) if (state.visits[k]) m.setIcon(visitedIcon(state.visits[k].kat));
@@ -214,6 +218,21 @@ function category(art) {
   return 'laub'; // inkl. Ginkgo und Zierobst
 }
 const accessible = p => !RULES.closed.has(p.GEBIETSGRUPPE);
+// Eigene Korrektur > vom Server bestätigte Korrektur > Einschätzung aus regeln.json
+function korrOf(t) { return (state.korrekturen || {})[t.key] || {}; }
+function zugang(t) {
+  const k = korrOf(t), o = OVERRIDES.get(String(t.props.BAUM_ID)) || {};
+  if (typeof k.zugang === 'boolean') return k.zugang;
+  if (typeof o.zugang === 'boolean') return o.zugang;
+  return accessible(t.props);
+}
+function kategorie(t) {
+  const base = category(t.props.GATTUNG_ART);
+  if (base === 'nadel') return base;
+  const k = korrOf(t), o = OVERRIDES.get(String(t.props.BAUM_ID)) || {};
+  const obst = typeof k.obst === 'boolean' ? k.obst : typeof o.obst === 'boolean' ? o.obst : null;
+  return obst === null ? base : obst ? 'obst' : 'laub';
+}
 const groupLabel = g => String(g || '').replace(/^MA \d+ - /, '');
 const EMOJI = { laub:'🌳', nadel:'🌲', obst:'🍎' };
 const KAT_NAME = { laub:'Laubbaum', nadel:'Nadelbaum', obst:'Obstbaum' };
@@ -232,7 +251,7 @@ let me = null, meMarker = null, accCircle = null, selected = null;
 function treeKey(p) { return `${p.BEZIRK}|${p.OBJEKT_STRASSE}|${p.BAUMNUMMER}`; }
 
 function iconFor(t) {
-  return L.divIcon({ className: 'tree-ic' + (accessible(t.props) ? '' : ' closed'), html: EMOJI[category(t.props.GATTUNG_ART)], iconSize: [30, 30] });
+  return L.divIcon({ className: 'tree-ic' + (zugang(t) ? '' : ' closed'), html: EMOJI[kategorie(t)], iconSize: [30, 30] });
 }
 const HEART = c => `<svg viewBox="0 0 32 32" width="30" height="30"><path d="M16 28C7 21 2 16 2 10.5 2 6.4 5.2 3.5 9 3.5c2.8 0 5.2 1.6 7 4 1.8-2.4 4.2-4 7-4 3.8 0 7 2.9 7 7 0 5.5-5 10.5-14 17.5z" fill="${c}" stroke="#fff" stroke-width="2"/></svg>`;
 const CORE = `<svg viewBox="0 0 32 32" width="30" height="30"><path d="M16 5c0-2 1-3 3-3.5" stroke="#6b4a2b" stroke-width="2" fill="none"/><path d="M19 4.5c2-2 4.5-1.5 5.5-.5-1.5 1.5-3.5 2-5.5.5z" fill="#4caf50"/><path d="M7 8c2-3 6-3.5 9-3.5S23 5 25 8c-3 1-4.5 3.5-4.5 8s1.5 7 4.5 8c-2 3-6 4-9 4s-7-1-9-4c3-1 4.5-3.5 4.5-8S10 9 7 8z" fill="#f6ecc4" stroke="#fff" stroke-width="1.5"/><path d="M7 8c2-3 6-3.5 9-3.5S23 5 25 8c-3 .8-6 1.2-9 1.2S10 8.8 7 8z" fill="#d93a2b"/><path d="M7 24c3-.8 6-1.2 9-1.2s6 .4 9 1.2c-2 3-6 4-9 4s-7-1-9-4z" fill="#d93a2b"/><ellipse cx="14" cy="16" rx="1.2" ry="2" fill="#5b3a1e"/><ellipse cx="18" cy="16" rx="1.2" ry="2" fill="#5b3a1e"/></svg>`;
@@ -263,7 +282,7 @@ function refreshMarkers() {
   }
   // offene Bäume
   for (const t of trees.values()) {
-    const show = !state.visits[t.key] && (mode !== 'open' || accessible(t.props)); // „Offen“ zeigt nur Spielbares
+    const show = !state.visits[t.key] && (mode !== 'open' || zugang(t)); // „Offen“ zeigt nur Spielbares
     if (show && !openLayer.hasLayer(t.marker)) openLayer.addLayer(t.marker);
     if (!show && openLayer.hasLayer(t.marker)) openLayer.removeLayer(t.marker);
   }
@@ -304,6 +323,8 @@ async function loadTrees() {
       trees.set(key, t);
     }
     refreshMarkers();
+    await loadOverrides(bbox);
+    refreshMarkers(); trees.forEach(t => t.marker && t.marker.setIcon(iconFor(t)));
     if ((gj.features || []).length >= CFG.maxFeatures) showHint('Sehr viele Bäume – näher zoomen für alle');
   } catch (e) {
     console.error(e);
@@ -424,11 +445,12 @@ function inRange(t) {
 function closeSheet() { $('sheet').classList.add('hidden'); selected = null; }
 function openTree(t) {
   selected = t;
-  const p = t.props, kat = category(p.GATTUNG_ART), v = state.visits[t.key];
+  const p = t.props, kat = kategorie(t), v = state.visits[t.key], korr = korrOf(t);
   const d = me ? Math.round(dist(me.latlng, t.latlng)) : null;
   let html = `<button class="close" onclick="closeSheet()">×</button>
     <h2>${EMOJI[kat]} ${esc(p.GATTUNG_ART || 'Unbekannte Art')}</h2>
-    <div class="meta">${kat === 'obst' ? 'Obstbaum mit essbaren Früchten' : KAT_NAME[kat]} · ${esc(p.OBJEKT_STRASSE)} · ${esc(p.BEZIRK)}. Bezirk${p.GEBIETSGRUPPE ? ' · ' + esc(groupLabel(p.GEBIETSGRUPPE)) : ''}</div>
+    <div class="meta">${kat === 'obst' ? 'Obstbaum mit essbaren Früchten' : KAT_NAME[kat]} · ${esc(p.OBJEKT_STRASSE)} · ${esc(p.BEZIRK)}. Bezirk${p.GEBIETSGRUPPE ? ' · ' + esc(groupLabel(p.GEBIETSGRUPPE)) : ''}
+      · <a href="#" onclick="openInfo();return false">ℹ️ Infos</a>${kat !== 'nadel' ? ` · <a href="#" onclick="obstKorrektur();return false">Früchte falsch eingeordnet?</a>` : ''}</div>
     <div class="info"><div class="grid">
       <b>Wikipedia</b><span><a id="wikiLink" href="${wikiSearchUrl(p.GATTUNG_ART)}" target="_blank" rel="noopener">${esc(speciesOf(p.GATTUNG_ART) || genusOf(p.GATTUNG_ART))}</a></span>
       <b>Baumnummer</b><span>${esc(p.BAUMNUMMER)}</span>
@@ -446,9 +468,13 @@ function openTree(t) {
       <div id="photoList">${(v.photos || []).length ? '' : '<div class="small" style="margin-top:8px">Noch keine Fotos.</div>'}</div>
       <button class="btn ghost" disabled>✉️ Nachricht für den nächsten Besucher (kommt mit dem Server)</button>`;
     renderPhotoList(v);
-  } else if (!accessible(p)) {
-    html += `<div class="warn">🔒 Nicht öffentlich zugänglich (${esc(groupLabel(p.GEBIETSGRUPPE))}) – dieser Baum ist vom Spiel ausgenommen.</div>`;
+  } else if (!zugang(t)) {
+    html += `<div class="warn">🔒 ${korr.zugang === false ? 'Von dir als nicht zugänglich gemeldet' : `Nicht öffentlich zugänglich${p.GEBIETSGRUPPE ? ` (${esc(groupLabel(p.GEBIETSGRUPPE))})` : ''}`} – dieser Baum ist vom Spiel ausgenommen. <a href="#" onclick="openInfo();return false">Warum?</a></div>
+      <button class="btn" disabled>📷 Plakette scannen</button>
+      ${korr.zugang === false ? `<button class="btn ghost" onclick="meldeKorrektur(selected, 'zugang', null)">↩️ Meldung zurücknehmen</button>`
+        : `<button class="btn sec" onclick="zugangMelden()">🔓 Baum ist doch zugänglich – melden und scannen</button>`}`;
   } else {
+    if (korr.zugang === true) html += `<div class="ok">🔓 Von dir als zugänglich gemeldet – du kannst ihn scannen. <a href="#" onclick="meldeKorrektur(selected, 'zugang', null);return false">Zurücknehmen</a></div>`;
     const ok = inRange(t);
     html += `<div class="warn${ok ? ' hidden' : ''}" id="warnRange">Geh näher hin (max. ${CFG.radius} m), um den Baum zu scannen.</div>`;
     html += `<button class="btn" id="btnScan" ${ok ? '' : 'disabled'} onclick="startLive()">📷 Plakette scannen</button>
@@ -827,7 +853,9 @@ function planB(reusePhoto) {
     <div class="meta">Ein Foto des Baumes oder der Plakette ist Pflicht, da eine Meldung des Problems automatisch an die Wiener Gärten gesendet wird.</div>
     <button class="btn sec" onclick="chooseReason('fehlt', ${!!reusePhoto})">Plakette fehlt</button>
     <button class="btn sec" onclick="chooseReason('unlesbar', ${!!reusePhoto})">Plakette nicht lesbar</button>
-    <button class="btn sec" onclick="chooseReason('zu_hoch', ${!!reusePhoto})">Plakette zu hoch</button>`;
+    <button class="btn sec" onclick="chooseReason('zu_hoch', ${!!reusePhoto})">Plakette zu hoch</button>
+    <button class="btn sec" onclick="nichtZugaenglich()">🔒 Baum nicht zugänglich (z. B. eingezäunt)</button>
+    <div class="small">„Baum nicht zugänglich“ braucht kein Foto und bringt keine Punkte – der Baum wird für dich ausgegraut und an uns gemeldet.</div>`;
 }
 function chooseReason(reason, reuse) {
   planBReason = reason;
@@ -850,7 +878,7 @@ async function recordVisit(t, method, reason, photo) {
   if (!state.districts.includes(bez)) { pts += 10; why.push('neuer Bezirk +10'); state.districts.push(bez); }
   const now = new Date();
   state.visits[t.key] = {
-    key: t.key, nummer: p.BAUMNUMMER, art: p.GATTUNG_ART, gattung: genusOf(p.GATTUNG_ART), kat: category(p.GATTUNG_ART),
+    key: t.key, nummer: p.BAUMNUMMER, art: p.GATTUNG_ART, gattung: genusOf(p.GATTUNG_ART), kat: kategorie(t),
     bezirk: bez, strasse: p.OBJEKT_STRASSE, lat: t.latlng.lat, lon: t.latlng.lng, ts: now.toISOString(),
     method, reason, points: pts, pending: report, pendingUntil: report ? addWorkdays(now, CFG.reportWorkdays).toISOString() : null,
     reportQueued: report, props: p
@@ -897,6 +925,7 @@ $('btnStats').onclick = () => {
     <h3>Bezirke</h3>${groups('bezirk', k => k + '. Bezirk')}
     <h3>Gattungen</h3>${groups('gattung', k => k)}
     <div class="small">Zahlen rechts: deine Bäume / zugängliche Bäume in Wien. Die Rangliste kommt mit dem Server.</div>
+    <button class="btn sec" onclick="openInfo()">ℹ️ Spielregeln & Infos zu den Bäumen</button>
     <h3>Sicherung</h3>
     <button class="btn sec" onclick="exportData()">Besuche exportieren (JSON)</button>
     <button class="btn sec" onclick="$('importFile').click()">Besuche importieren</button>
@@ -916,6 +945,96 @@ async function importData(file) {
     state = s; saveState(); refreshMarkers();
     toast('Import erfolgreich'); $('stats').classList.add('hidden');
   } catch (e) { toast('Import fehlgeschlagen: ' + e.message); }
+}
+
+// ---------- Korrekturen: falsche Einschätzungen melden ----------
+// Wirkt sofort für dich (lokal) und wird an den Server geschickt; dort wird es nachts für alle übernommen,
+// sobald es bestätigt ist (siehe docs/korrekturen.md).
+function meldeKorrektur(t, art, wert) {
+  state.korrekturen = state.korrekturen || {};
+  const k = state.korrekturen[t.key] = state.korrekturen[t.key] || {};
+  if (wert === null) delete k[art]; else k[art] = wert;
+  k.baum_id = t.props.BAUM_ID; k.key = t.key;
+  (k.queue = k.queue || []).push({ art, wert, zeit: new Date().toISOString(), lat: me ? +me.latlng.lat.toFixed(6) : null, lon: me ? +me.latlng.lng.toFixed(6) : null });
+  saveState();
+  if (t.marker) t.marker.setIcon(iconFor(t));
+  refreshMarkers();
+  sendKorrekturen();
+  openTree(t);
+}
+function zugangMelden() {
+  const t = selected; if (!t) return;
+  if (!confirm('Ist dieser Baum frei zugänglich (z. B. Vorplatz eines Amtsgebäudes)? Er wird dann für dich freigeschaltet und an uns gemeldet.')) return;
+  meldeKorrektur(t, 'zugang', true);
+  toast('Danke! Du kannst den Baum jetzt scannen.');
+}
+function nichtZugaenglich() {
+  const t = selected; if (!t) return;
+  meldeKorrektur(t, 'zugang', false);
+  toast('Danke für die Meldung – der Baum ist jetzt ausgegraut.');
+}
+function obstKorrektur() {
+  const t = selected; if (!t) return;
+  const now = kategorie(t);
+  $('sheet').innerHTML = `<button class="close" onclick="openTree(selected)">×</button>
+    <h2>Früchte falsch eingeordnet?</h2>
+    <div class="meta">Derzeit: ${now === 'obst' ? 'Obstbaum mit essbaren Früchten' : 'Laubbaum ohne essbare Früchte'} (${esc(t.props.GATTUNG_ART)})</div>
+    <button class="btn sec" onclick="meldeKorrektur(selected, 'obst', true)">🍎 Trägt essbare Früchte</button>
+    <button class="btn sec" onclick="meldeKorrektur(selected, 'obst', false)">🌳 Keine essbaren Früchte</button>
+    ${typeof korrOf(t).obst === 'boolean' ? `<button class="btn ghost" onclick="meldeKorrektur(selected, 'obst', null)">↩️ Meine Meldung zurücknehmen</button>` : ''}`;
+}
+let sending = false;
+async function sendKorrekturen() {
+  if (!CFG.api || sending || !navigator.onLine) return; // ohne Server: bleibt vorgemerkt
+  sending = true;
+  try {
+    for (const k of Object.values(state.korrekturen || {})) {
+      while (k.queue && k.queue.length) {
+        const m = k.queue[0];
+        const r = await fetch(CFG.api + 'korrektur', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ baum_id: k.baum_id, art: m.art, wert: m.wert, lat: m.lat, lon: m.lon, zeit: m.zeit }) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        k.queue.shift(); saveState();
+      }
+    }
+  } catch (e) { console.warn('Korrekturen später senden', e); }
+  sending = false;
+}
+window.addEventListener('online', sendKorrekturen);
+// Vom Server bestätigte Korrekturen für den Kartenausschnitt holen
+async function loadOverrides(bbox) {
+  if (!CFG.api) return;
+  try {
+    const j = await (await fetch(CFG.api + 'korrekturen?bbox=' + bbox, { credentials: 'include' })).json();
+    (j.baeume || []).forEach(o => OVERRIDES.set(String(o.baum_id), { zugang: o.zugang, obst: o.obst }));
+  } catch (e) { /* ohne Server egal */ }
+}
+
+// ---------- Infos zum Nachlesen ----------
+function openInfo() {
+  const r = RULES.raw || { nicht_zugaenglich: [], obst_beschreibung: [], zier_beschreibung: '' };
+  const closed = r.nicht_zugaenglich.filter(g => g !== 'Test').map(groupLabel);
+  $('info').innerHTML = `<button class="close" onclick="$('info').classList.add('hidden')">×</button>
+    <h2>Spielregeln & Infos</h2>
+    <h3>Punkte</h3>
+    <ul class="small" style="font-size:14px;padding-left:18px">
+      <li>Erster erfolgreicher Scan eines Baums: <b>1 Punkt</b> – jeder Baum zählt nur einmal.</li>
+      <li>Erster Baum in einem neuen Bezirk: <b>+10</b>.</li>
+      <li>Als Erste:r an einem Baum (gilt 30 Tage): <b>+3</b> (kommt mit dem Server).</li>
+      <li>Plakette fehlt oder unlesbar, mit Foto gemeldet: <b>5 Punkte</b>, vorläufig für ${CFG.reportWorkdays} Werktage. Scannt in der Zeit jemand die Plakette doch, gibt es <b>−10</b>.</li>
+    </ul>
+    <h3>🔒 Welche Bäume sind ausgenommen?</h3>
+    <p style="font-size:14px">Der Baumkataster der Stadt Wien gibt an, auf welchem Gelände ein Baum steht. Bäume auf Gelände, das normalerweise nicht frei betreten werden kann, sind <b>grau</b> und zählen nicht – zum Schutz von Kindern und weil man dort nicht einfach hin kann:</p>
+    <div class="small" style="font-size:13px">${closed.map(esc).join(' · ')}</div>
+    <p style="font-size:14px">Diese Einordnung ist eine Einschätzung. Ist ein grauer Baum doch frei zugänglich (z. B. der Vorplatz eines Amtshauses), tippe im Baumfenster auf <b>„Baum ist doch zugänglich – melden“</b>. Umgekehrt kannst du unter „Plakette geht nicht“ <b>„Baum nicht zugänglich“</b> wählen. Deine Meldung gilt sofort für dich und wird für alle übernommen, sobald sie bestätigt ist.</p>
+    <h3>🍎 Was gilt als Obstbaum?</h3>
+    <p style="font-size:14px">Nur Bäume mit <b>essbaren Früchten</b>:</p>
+    <ul class="small" style="font-size:13px;padding-left:18px">${(r.obst_beschreibung || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+    <p style="font-size:14px">${esc(r.zier_beschreibung || '')}</p>
+    <p class="small">Bitte nur pflücken, was du sicher erkennst, Früchte von Straßenbäumen gut waschen und auf Verbote vor Ort achten. Falsch eingeordnet? Im Baumfenster „Früchte falsch eingeordnet?“ antippen.</p>
+    <h3>Daten</h3>
+    <p class="small">Baumdaten: Stadt Wien – data.wien.gv.at (CC BY 4.0)${STATS ? `, Stand ${fmtDate(STATS.stand)}: ${num(STATS.gesamt)} Bäume, davon ${num(STATS.zugaenglich)} zugänglich` : ''}. Karte © OpenStreetMap. <a href="datenschutz.html">Datenschutz</a></p>`;
+  $('info').classList.remove('hidden');
 }
 
 // ---------- Wikipedia ----------
@@ -1245,6 +1364,7 @@ $('btnMe').onclick = () => openProfile(false);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW', e));
 renderPoints();
 renderMe();
+sendKorrekturen();
 refreshMarkers();
 checkReturnedReport();
 if (!state.profile || !state.profile.name) openProfile(true);
