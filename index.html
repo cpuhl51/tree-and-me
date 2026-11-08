@@ -502,6 +502,18 @@ function grabGuide(full) {
   c.getContext('2d').drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height);
   return c;
 }
+// Live: Der eigene Baum braucht 2 Lesungen ohne Gegenstimme oder mind. 3 und 1,25-mal so viele wie jede andere Nummer;
+// ein anderer Baum in der Nähe mind. 4 Lesungen und doppelt so viele wie jede andere (dann wird nachgefragt).
+function liveDecision(t, votes) {
+  const own = normNum(t.props.BAUMNUMMER);
+  const ownVotes = Object.entries(votes).filter(([n]) => fitsNumber(n, own)).reduce((s, [, c]) => s + c, 0);
+  const ranked = Object.entries(votes).sort((a, b) => b[1] - a[1]);
+  const rival = ranked.filter(([n]) => !fitsNumber(n, own)).reduce((m, [, c]) => Math.max(m, c), 0);
+  if ((ownVotes >= 2 && rival === 0) || (ownVotes >= 3 && ownVotes >= 1.25 * rival)) return t; // eigene Nummer klar vorne
+  if (ownVotes >= rival) return null;                      // noch unklar: weiterlesen
+  if (!ranked.length || ranked[0][1] < 4 || (ranked[1] && ranked[0][1] < 2 * ranked[1][1])) return null;
+  return matchNumber(t, [ranked[0][0]]);
+}
 async function liveLoop() {
   while (live && live.running) {
     const frame = grabGuide(false);
@@ -509,9 +521,8 @@ async function liveLoop() {
       const nums = await quickOcr(frame, live.frames);
       if (!live) return;
       live.frames++;
-      nums.forEach(([n, c]) => live.votes[n] = (live.votes[n] || 0) + c);
-      const ranked = Object.entries(live.votes).sort((a, b) => b[1] - a[1]).map(([n]) => n);
-      const hit = matchNumber(live.t, nums.map(x => x[0])) || (live.frames % 4 === 0 ? matchNumber(live.t, ranked.slice(0, 3)) : null);
+      nums.forEach(([n]) => live.votes[n] = (live.votes[n] || 0) + 1); // Anzahl Lesungen je Nummer
+      const hit = liveDecision(live.t, live.votes);
       if (hit) {
         $('liveGuide').classList.add('hit'); $('liveMsg').textContent = `Erkannt: Nr. ${hit.props.BAUMNUMMER} ✔`;
         const photo = await new Promise(r => grabGuide(true).toBlob(r, 'image/jpeg', 0.85));
@@ -627,6 +638,15 @@ function binarize(c, C, strokeR) {
   ctx.putImageData(id, 0, 0);
   return c;
 }
+// Für dunkle, dicke Schrift (z. B. Filzstift auf Pfahl): nur sehr dunkle Pixel werden Tinte
+function inkBinarize(c) {
+  const w = c.width, h = c.height, ctx = c.getContext('2d', { willReadFrequently: true }), id = ctx.getImageData(0, 0, w, h), d = id.data;
+  const G = new Float32Array(w * h); for (let i = 0; i < w * h; i++) G[i] = 0.3 * d[i * 4] + 0.59 * d[i * 4 + 1] + 0.11 * d[i * 4 + 2];
+  const sorted = Float32Array.from(G).sort(), med = sorted[Math.floor(w * h / 2)], dark = sorted[Math.floor(w * h * 0.02)];
+  const T = dark + (med - dark) * 0.35;
+  for (let i = 0; i < w * h; i++) { const v = G[i] < T ? 0 : 255; d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255; }
+  ctx.putImageData(id, 0, 0); return c;
+}
 // Behält nur ziffernartige schwarze Flecken in einer Reihe und schneidet auf diese Zeile zu
 function digitLine(c) {
   const w = c.width, h = c.height, d = c.getContext('2d').getImageData(0, 0, w, h).data;
@@ -673,7 +693,10 @@ async function ensureOcr() {
 }
 // Schnelle Erkennung für ein Live-Bild (nur wenige Varianten, damit es flüssig bleibt)
 const LIVE_VARIANTS = [];
-for (const rot of [0, -8, 8, -4, 4]) for (const usePlate of [false, true]) for (const [C, R] of [[12, 2], [22, 3]]) LIVE_VARIANTS.push({ rot, usePlate, C, R });
+// Reihenfolge nach Ergiebigkeit bei echten Handyfotos: zuerst Plakette suchen + kräftig binarisieren, dann Filzstift-Variante
+for (const rot of [0, 4, -4]) LIVE_VARIANTS.push({ rot, usePlate: true, C: 30, R: 2 }, { rot, usePlate: true, C: 22, R: 1 }, { rot, usePlate: false, ink: true });
+for (const rot of [8, -8]) LIVE_VARIANTS.push({ rot, usePlate: true, C: 30, R: 2 }, { rot, usePlate: true, C: 22, R: 1 });
+for (const rot of [0, 4, -4]) for (const [usePlate, C, R] of [[true, 22, 3], [false, 12, 2], [true, 12, 2], [false, 22, 3]]) LIVE_VARIANTS.push({ rot, usePlate, C, R });
 async function quickOcr(frame, k = 0) {
   await ensureOcr();
   const out = {}, plates = findPlate(frame);
@@ -681,7 +704,8 @@ async function quickOcr(frame, k = 0) {
   const variants = [LIVE_VARIANTS[(2 * k) % LIVE_VARIANTS.length], LIVE_VARIANTS[(2 * k + 1) % LIVE_VARIANTS.length]];
   for (const vr of variants) {
     const box = vr.usePlate ? plates[0] || null : null;
-    const cv = digitLine(binarize(cropVariant(frame, box, 'norm', vr.rot), vr.C, vr.R)); if (!cv) continue;
+    const base = cropVariant(frame, box, 'norm', vr.rot);
+    const cv = digitLine(vr.ink ? inkBinarize(base) : binarize(base, vr.C, vr.R)); if (!cv) continue;
     for (const psm of ['7', '8']) {
       await ocrWorker.setParameters({ tessedit_pageseg_mode: psm });
       const { data } = await ocrWorker.recognize(cv);
@@ -690,21 +714,26 @@ async function quickOcr(frame, k = 0) {
   }
   return Object.entries(out).sort((a, b) => b[1] - a[1]);
 }
+const BIN_MODES = { bin1: [12, 2], bin2: [22, 3], bin3: [30, 2], bin4: [22, 1] }; // [Kontrast, Strichstärke]
 async function ocr(file) {
   await ensureOcr();
   const img = await createImageBitmap(file);
   const plates = findPlate(img);
   const tries = [];
   for (const rot of [0, -10, 10, -45, 45]) {
-    for (const box of plates) for (const mode of ['bin1', 'bin2', 'hi']) tries.push({ box, rot, mode });
-    if (rot === 0) tries.push({ box: null, rot, mode: 'bin1' }, { box: null, rot, mode: 'bin2' });
+    for (const box of plates) for (const mode of ['bin3', 'bin4', 'bin1', 'bin2', 'hi']) tries.push({ box, rot, mode });
+    if (rot === 0) {
+      // Bildmitte: dort hält man Plakette oder Pfahl-Nummer meist hin
+      const side = Math.min(img.width, img.height) * 0.7, center = { x: (img.width - side) / 2, y: (img.height - side) / 2, w: side, h: side };
+      tries.push({ box: center, rot, mode: 'ink' }, { box: null, rot, mode: 'bin1' }, { box: null, rot, mode: 'ink' }, { box: center, rot, mode: 'bin3' }, { box: null, rot, mode: 'bin2' });
+    }
   }
   const t0 = performance.now();
   const votes = {};
   for (const tr of tries) {
     if (performance.now() - t0 > 9000) break; // höchstens ca. 9 s
-    let cv = tr.mode.startsWith('bin') ? binarize(cropVariant(img, tr.box, 'norm', tr.rot), tr.mode === 'bin1' ? 12 : 22, tr.mode === 'bin1' ? 2 : 3) : cropVariant(img, tr.box, tr.mode, tr.rot);
-    if (tr.mode.startsWith('bin')) { cv = digitLine(cv); if (!cv) continue; }
+    let cv = tr.mode === 'ink' ? inkBinarize(cropVariant(img, tr.box, 'norm', tr.rot)) : tr.mode.startsWith('bin') ? binarize(cropVariant(img, tr.box, 'norm', tr.rot), ...BIN_MODES[tr.mode]) : cropVariant(img, tr.box, tr.mode, tr.rot);
+    if (tr.mode === 'ink' || tr.mode.startsWith('bin')) { cv = digitLine(cv); if (!cv) continue; }
     for (const psm of ['7', '8']) {
       await ocrWorker.setParameters({ tessedit_pageseg_mode: psm });
       const { data } = await ocrWorker.recognize(cv);
@@ -731,18 +760,22 @@ function editDist(a, b) {
 const isSubseq = (s, t) => { let i = 0; for (const ch of t) if (ch === s[i]) i++; return i === s.length; };
 // Vergleicht die gelesenen Nummern mit den Bäumen in der Nähe. Kleine Lesefehler (1 Ziffer falsch,
 // oder bis zu 2 Ziffern übersehen) werden akzeptiert, wenn genau EIN Baum in der Nähe passt.
+// Nachbarbäume tragen oft fortlaufende Nummern (65, 66, 68 …) und werden leicht verwechselt.
+// Darum zählt nur die beste Lesung (numbers[0]): passt sie zum ausgewählten Baum, ist er es;
+// passt sie genau zu einem anderen Baum in der Nähe, wird nachgefragt.
+function fitsNumber(n, b) {
+  if (n === b) return true;
+  if (n.length < 3 || b.length < 3) return false; // kurze Nummern nur exakt
+  return editDist(n, b) <= 1 || (b.length > n.length && b.length - n.length <= 2 && isSubseq(n, b));
+}
 function matchNumber(t, numbers) {
   if (!numbers.length) return null;
+  const own = normNum(t.props.BAUMNUMMER);
+  if (fitsNumber(numbers[0], own)) return t; // nur die beste Lesung zählt
   const ref = me ? me.latlng : t.latlng;
-  const near = [t, ...[...trees.values()].filter(o => o !== t && !state.visits[o.key] && dist(ref, o.latlng) <= CFG.matchRadius)];
-  for (const n of numbers) { const hit = near.find(o => normNum(o.props.BAUMNUMMER) === n); if (hit) return hit; }
-  for (const n of numbers) {
-    if (n.length < 3) continue;
-    const fits = near.filter(o => { const b = normNum(o.props.BAUMNUMMER);
-      return editDist(n, b) <= 1 || (b.length - n.length <= 2 && b.length > n.length && isSubseq(n, b)); });
-    if (fits.length === 1) return fits[0];
-  }
-  return null;
+  const near = [...trees.values()].filter(o => o !== t && !state.visits[o.key] && dist(ref, o.latlng) <= CFG.matchRadius);
+  const fits = near.filter(o => normNum(o.props.BAUMNUMMER) === numbers[0]);
+  return fits.length === 1 ? fits[0] : null;
 }
 
 function ocrFailed(t, numbers) {
