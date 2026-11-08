@@ -77,6 +77,9 @@ function ep_besuch(): never {
 
     $baum = baum_holen($baumId) ?? fehler('baum_unbekannt', 'Diesen Baum gibt es im Baumkataster nicht.', 404);
     if ($baum['entfernt_seit']) fehler('baum_entfernt', 'Dieser Baum steht laut Kataster nicht mehr.', 410);
+    if (!zugaenglich_fuer($baum, $sid)) {
+        fehler('nicht_zugaenglich', 'Dieser Baum steht auf nicht öffentlich zugänglichem Gelände und ist vom Spiel ausgenommen.', 403);
+    }
 
     $abstand = abstand_m($lat, $lon, (float)$baum['lat'], (float)$baum['lon']);
     if ($abstand > (int)cfg('besuch_max_abstand_m')) {
@@ -162,7 +165,8 @@ function ep_besuch(): never {
 function baum_json(array $b): array {
     return [
         'baum_id' => (int)$b['baum_id'], 'nummer' => $b['nummer'], 'art' => $b['art'],
-        'bezirk' => (int)$b['bezirk'], 'strasse' => $b['strasse'], 'lat' => (float)$b['lat'], 'lon' => (float)$b['lon'],
+        'bezirk' => (int)$b['bezirk'], 'strasse' => $b['strasse'], 'gebietsgruppe' => $b['gebietsgruppe'] ?? null,
+        'lat' => (float)$b['lat'], 'lon' => (float)$b['lon'],
     ];
 }
 
@@ -190,7 +194,10 @@ function ep_baum(): never {
     $besucher = (int)q('SELECT COUNT(*) FROM besuche WHERE baum = ?', [$baum['baum_id']])->fetchColumn();
     $meldung = (bool)q("SELECT 1 FROM meldungen WHERE baum = ? AND status = 'offen'", [$baum['baum_id']])->fetch();
     antwort(['ok' => true, 'baum' => baum_json($baum), 'erster' => $erster ?: null,
-             'besucher' => $besucher, 'meldung_offen' => $meldung, 'entfernt' => $baum['entfernt_seit'] !== null]);
+             'besucher' => $besucher, 'meldung_offen' => $meldung, 'entfernt' => $baum['entfernt_seit'] !== null,
+             'regel_zugaenglich' => regel_zugaenglich($baum),
+             'zugang' => $baum['zugang_korrektur'] === null ? null : (bool)$baum['zugang_korrektur'],
+             'obst' => $baum['obst_korrektur'] === null ? null : (bool)$baum['obst_korrektur']]);
 }
 
 // ---------- Rangliste ----------

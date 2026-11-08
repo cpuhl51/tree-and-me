@@ -26,11 +26,32 @@ CREATE TABLE IF NOT EXISTS baeume (
   art             VARCHAR(150) NULL,                  -- GATTUNG_ART
   bezirk          TINYINT UNSIGNED NOT NULL,
   strasse         VARCHAR(150) NULL,
+  gebietsgruppe   VARCHAR(80)  NULL,                  -- GEBIETSGRUPPE (für regeln.json: nicht_zugaenglich)
   lat             DECIMAL(10,8) NOT NULL,
   lon             DECIMAL(11,8) NOT NULL,
+  zugang_korrektur TINYINT(1)  NULL,                  -- für alle übernommen; NULL = regeln.json gilt
+  obst_korrektur   TINYINT(1)  NULL,
+  korrektur_seit   DATETIME    NULL,
   zuletzt_gesehen DATETIME     NULL,                  -- letzter Abgleich, in dem der Baum vorkam
   entfernt_seit   DATETIME     NULL,
-  KEY ix_bezirk (bezirk)
+  KEY ix_bezirk (bezirk),
+  KEY ix_lage (lat, lon)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Korrekturen durch Spieler (docs/korrekturen.md): eine Meinung pro Spieler, Baum und Art
+CREATE TABLE IF NOT EXISTS korrekturen (
+  id         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  spieler_id INT UNSIGNED NOT NULL,
+  baum_id    INT UNSIGNED NOT NULL,
+  art        ENUM('zugang','obst') NOT NULL,
+  wert       TINYINT(1)   NULL,                       -- NULL = zurückgenommen
+  lat        DOUBLE       NULL,
+  lon        DOUBLE       NULL,
+  erstellt   DATETIME     NOT NULL,
+  UNIQUE KEY eine_meinung (spieler_id, baum_id, art),
+  KEY ix_baum (baum_id, art),
+  CONSTRAINT fk_korr_spieler FOREIGN KEY (spieler_id) REFERENCES spieler(id) ON DELETE CASCADE,
+  CONSTRAINT fk_korr_baum    FOREIGN KEY (baum_id)    REFERENCES baeume(baum_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Ein Besuch pro Spieler und Baum (Regel: nur der erste erfolgreiche Scan zählt)

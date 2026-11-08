@@ -8,6 +8,7 @@ require __DIR__ . '/lib/google.php';
 require __DIR__ . '/lib/auth.php';
 require __DIR__ . '/lib/kataster.php';
 require __DIR__ . '/lib/spiel.php';
+require __DIR__ . '/lib/korrektur.php';
 require __DIR__ . '/lib/cron.php';
 
 header('X-Content-Type-Options: nosniff');
@@ -41,6 +42,8 @@ $routen = [
     'GET besuche' => 'ep_meine_besuche',
     'GET baum' => 'ep_baum',
     'GET rangliste' => 'ep_rangliste',
+    'POST korrektur' => 'ep_korrektur',
+    'GET korrekturen' => 'ep_korrekturen',
     'GET cron' => 'ep_cron',
     'GET status' => 'ep_status',
 ];

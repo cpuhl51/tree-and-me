@@ -14,19 +14,19 @@ server/
 
 ## Einrichten bei all-inkl (einmalig)
 
-1. **Subdomain** anlegen (KAS → Domain → Subdomain), z. B. `baum.deinedomain.at`, eigener Ordner, z. B. `/tree-and-me/`.
+1. **Subdomain** anlegen (KAS → Domain → Subdomain), z. B. `app.tree-and-me.puhl.ch`, eigener Ordner, z. B. `/tree-and-me/`.
    PHP-Version **8.3 oder neuer** einstellen. SSL-Zertifikat (Let's Encrypt) aktivieren.
 2. **Datenbank** anlegen (KAS → Datenbanken). In phpMyAdmin den Inhalt von `schema.sql` ausführen.
 3. **FTP-Zugang** nur für den App-Ordner anlegen (KAS → FTP → Zusatz-FTP-Benutzer, Verzeichnis `/tree-and-me/`).
-4. **Postfach/Adresse** für den Absender, z. B. `noreply@deinedomain.at`.
+4. **Postfach/Adresse** für den Absender, z. B. `noreply@puhl.ch`.
 5. **config.php**: `config.sample.php` kopieren, ausfüllen, als `api/config.php` per FTP hochladen
    (oder besser als `tree-and-me-config.php` eine Ebene über dem App-Ordner – dann ist sie nie über das Web erreichbar).
    `ma42_mail` leer lassen, solange getestet wird: Sammelmails gehen dann nur an `mail_admin`.
 6. **GitHub-Secrets** im Repo setzen: `FTP_SERVER`, `FTP_USER`, `FTP_PASSWORD`. Danach lädt jeder Push auf `main` App + API hoch.
-7. **Cronjob** (KAS → Tools → Cronjobs): Adresse `https://baum.deinedomain.at/api/cron?key=<cron_key>`.
+7. **Cronjob** (KAS → Tools → Cronjobs): Adresse `https://app.tree-and-me.puhl.ch/api/cron?key=<cron_key>`.
    Nachts mehrmals aufrufen (z. B. alle 15 Min. zwischen 2 und 4 Uhr). Jeder Aufruf arbeitet ~25 s am Baumkataster
    weiter; ein voller Abgleich (~233.000 Bäume) braucht ca. 10–15 Aufrufe.
-8. Test: `https://baum.deinedomain.at/api/status` muss `{"ok":true,…}` zeigen.
+8. Test: `https://app.tree-and-me.puhl.ch/api/status` muss `{"ok":true,…}` zeigen.
 
 ## Schnittstelle
 
@@ -50,6 +50,8 @@ Schreibende Anfragen (POST) werden nur mit passendem `Origin`-Header angenommen.
 | GET | `besuche` | – | eigene Besuche mit Punkten |
 | GET | `baum?id=` | – | Erster, Besucherzahl, offene Meldung |
 | GET | `rangliste` | `zeitraum=gesamt/monat/woche`, `bezirk=1..23`, `limit` | Liste + eigener Platz |
+| POST | `korrektur` | `baum_id, art (zugang/obst), wert (true/false/null), lat, lon, zeit` | Einschätzung korrigieren (docs/korrekturen.md) |
+| GET | `korrekturen?bbox=w,s,o,n` | – | für alle übernommene Korrekturen im Ausschnitt (max. 0,5° × 0,5°) |
 | GET | `cron?key=` | – | nächtliche Aufgaben |
 | GET | `status` | – | Erreichbarkeit + Datenbank |
 
@@ -65,4 +67,11 @@ Schreibende Anfragen (POST) werden nur mit passendem `Origin`-Header angenommen.
 - Plan B *zu hoch*: Foto Pflicht, normale Punkte, keine Meldung.
 - Bäume lädt der Server beim ersten Scan einzeln aus dem Kataster nach; der nächtliche Abgleich markiert entfernte
   Bäume (Punkte bleiben).
+- **Zugang** (`lib/korrektur.php`, Vorgabe `docs/korrekturen.md`): Bäume, deren GEBIETSGRUPPE in `regeln.json → nicht_zugaenglich`
+  steht, werden abgelehnt (`nicht_zugaenglich`). Rangfolge: eigene Meldung des Spielers > für alle übernommene Korrektur > regeln.json.
+  `regeln.json` liegt im App-Ordner und wird mit hochgeladen – Änderungen daran wirken sofort in App und Server.
+- **Korrekturen**: höchstens 100 m vom Baum, max. 20 pro Spieler und Tag, neuere Meldung ersetzt ältere.
+  Nachts für alle übernommen: zugänglich bei OCR-Scan oder ≥ 2 Spielern mit Mehrheit; nicht zugänglich bei ≥ 2 Spielern
+  mit Mehrheit und ohne OCR-Scan in den letzten 90 Tagen; Früchte bei ≥ 2 Spielern mit Mehrheit. Bei Gleichstand gilt wieder regeln.json.
+  Ändert sich etwas, geht eine Übersicht an `mail_admin` (mit Zählung je Gebietsgruppe als Hinweis für regeln.json).
 - Punkte stehen als Buchungen in `punkte` – nachvollziehbar und korrigierbar (`art='korrektur'`).

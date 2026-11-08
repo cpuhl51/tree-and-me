@@ -11,6 +11,7 @@ function ep_cron(): never {
     $log = [];
     $log[] = meldungen_abschliessen();
     $log[] = sammelmail_ma42();
+    $log[] = korrekturen_mail(korrekturen_auswerten());
     q('DELETE FROM sitzungen WHERE ablauf < NOW()');
     q('DELETE FROM mail_tokens WHERE ablauf < NOW()');
     q('DELETE FROM versuche WHERE zeitpunkt < ?', [jetzt(-86400)]);

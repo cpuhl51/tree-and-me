@@ -22,7 +22,7 @@ jobs:
       - name: Paket zusammenstellen
         run: |
           mkdir -p paket/api
-          cp index.html sw.js manifest.webmanifest datenschutz.html *.png paket/
+          cp index.html sw.js manifest.webmanifest datenschutz.html regeln.json stats.json *.png paket/
           cp -r server/api/. paket/api/
           rm -f paket/api/config.php
           rm -rf paket/api/daten

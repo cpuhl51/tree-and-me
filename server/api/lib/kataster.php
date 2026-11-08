@@ -19,18 +19,19 @@ function baum_aus_feature(array $f): ?array {
         'art' => isset($p['GATTUNG_ART']) ? mb_substr((string)$p['GATTUNG_ART'], 0, 150) : null,
         'bezirk' => (int)$p['BEZIRK'],
         'strasse' => isset($p['OBJEKT_STRASSE']) ? mb_substr((string)$p['OBJEKT_STRASSE'], 0, 150) : null,
+        'gebietsgruppe' => isset($p['GEBIETSGRUPPE']) ? mb_substr((string)$p['GEBIETSGRUPPE'], 0, 80) : null,
         'lat' => (float)$c[1],
         'lon' => (float)$c[0],
     ];
 }
 
 function baum_speichern(array $b, string $gesehen): void {
-    q('INSERT INTO baeume (baum_id, nummer, art, bezirk, strasse, lat, lon, zuletzt_gesehen, entfernt_seit)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    q('INSERT INTO baeume (baum_id, nummer, art, bezirk, strasse, gebietsgruppe, lat, lon, zuletzt_gesehen, entfernt_seit)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
        ON DUPLICATE KEY UPDATE nummer = VALUES(nummer), art = VALUES(art), bezirk = VALUES(bezirk),
-         strasse = VALUES(strasse), lat = VALUES(lat), lon = VALUES(lon),
+         strasse = VALUES(strasse), gebietsgruppe = VALUES(gebietsgruppe), lat = VALUES(lat), lon = VALUES(lon),
          zuletzt_gesehen = VALUES(zuletzt_gesehen), entfernt_seit = NULL',
-        [$b['baum_id'], $b['nummer'], $b['art'], $b['bezirk'], $b['strasse'], $b['lat'], $b['lon'], $gesehen]);
+        [$b['baum_id'], $b['nummer'], $b['art'], $b['bezirk'], $b['strasse'], $b['gebietsgruppe'], $b['lat'], $b['lon'], $gesehen]);
 }
 
 /** Baum aus der eigenen Tabelle; fehlt er, wird er beim Kataster nachgeschlagen. */

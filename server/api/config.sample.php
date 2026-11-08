@@ -9,12 +9,12 @@ return [
         'pass' => 'HIER_DB_PASSWORT',
     ],
     // Adresse, unter der die App läuft (API liegt darunter in /api), ohne / am Ende
-    'app_url' => 'https://tree.example.at',
+    'app_url' => 'https://app.tree-and-me.puhl.ch',
 
     // Google Cloud Console → APIs & Dienste → Anmeldedaten → OAuth-Client-ID (Webanwendung)
     'google_client_ids' => ['XXXXXXXX.apps.googleusercontent.com'],
 
-    'mail_absender' => 'noreply@example.at',   // muss bei all-inkl als Postfach/Adresse existieren
+    'mail_absender' => 'noreply@puhl.ch',   // muss bei all-inkl als Postfach/Adresse existieren
     'mail_admin' => 'deine@adresse.at',          // bekommt Test-Sammelmails
     'ma42_mail' => '',                           // leer = Testbetrieb: Sammelmails gehen nur an mail_admin
 
