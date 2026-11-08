@@ -1,0 +1,12 @@
+# Alles unter /api/ an index.php geben, außer echte Dateien gibt es hier keine öffentlichen
+RewriteEngine On
+RewriteRule ^(lib|daten)(/|$) - [F,L]
+RewriteRule ^config\.php$ - [F,L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^ index.php [QSA,L]
+
+<FilesMatch "^(config\.php|config\.sample\.php)$">
+  Require all denied
+</FilesMatch>
+
+Options -Indexes
