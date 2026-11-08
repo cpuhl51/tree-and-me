@@ -48,6 +48,7 @@
   #outside b { color:#1a5fd0; }
   .arrow-ic { background:none; border:0; }
   #busy { position:fixed; inset:0; z-index:1400; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; color:#fff; font-size:16px; }
+  .tree-ic.closed { filter:grayscale(1) opacity(.45); }
   .tree-ic { font-size:22px; line-height:28px; text-align:center; filter:drop-shadow(0 1px 1px rgba(0,0,0,.35)); }
   .tree-ic.visited { background:rgba(47,107,58,.25); border:2px solid var(--green); border-radius:50%; }
   table.stat { width:100%; border-collapse:collapse; font-size:14px; margin:6px 0 16px; }
@@ -189,16 +190,31 @@ const fmtDate = d => new Date(d).toLocaleDateString('de-AT', { day:'2-digit', mo
 const normNum = s => String(s ?? '').replace(/\D/g, '').replace(/^0+/, '');
 
 // ---------- Baum-Kategorien ----------
-const NADEL = ['pinus','picea','abies','taxus','thuja','juniperus','cedrus','larix','metasequoia','pseudotsuga','sequoiadendron','sequoia','taxodium','chamaecyparis','cupressus','cryptomeria','tsuga','platycladus','sciadopitys','cupressocyparis','calocedrus'];
-const OBST = ['malus','pyrus','juglans','morus','cydonia','mespilus','castanea','ficus'];
-const OBST_PRUNUS = ['avium','cerasus','domestica','armeniaca','persica','insititia','dulcis'];
+// Regeln (zugänglich / Nadel / essbares Obst) und Wien-Statistik kommen aus regeln.json und stats.json
+let RULES = { closed: new Set(), nadel: new Set(), essbar: [] }, STATS = null;
+const rulesReady = (async () => {
+  try {
+    const r = await (await fetch('regeln.json', { cache: 'no-cache' })).json();
+    RULES = { closed: new Set(r.nicht_zugaenglich), nadel: new Set(r.nadel_gattungen), essbar: r.obst_essbar.map(p => new RegExp(p)) };
+  } catch (e) { console.warn('Regeln nicht geladen', e); }
+  try { STATS = await (await fetch('stats.json', { cache: 'no-cache' })).json(); } catch (e) { console.warn('Statistik nicht geladen', e); }
+  // gespeicherte Besuche mit den aktuellen Regeln neu einordnen
+  for (const v of Object.values(state.visits)) v.kat = category(v.art);
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
+  setTimeout(() => { // Karten-Symbole mit den neuen Regeln neu zeichnen
+    for (const [k, m] of visitedMarkers) if (state.visits[k]) m.setIcon(visitedIcon(state.visits[k].kat));
+    for (const t of trees.values()) t.marker.setIcon(iconFor(t));
+    refreshMarkers();
+  });
+})();
 function category(art) {
-  const w = String(art || '').toLowerCase().replace(/[^a-zäöüß\s]/g, ' ').trim().split(/\s+/).filter(x => x !== 'x');
-  const g = w[0] || '', sp = w[1] || '';
-  if (NADEL.includes(g)) return 'nadel';
-  if (OBST.includes(g) || (g === 'prunus' && OBST_PRUNUS.includes(sp))) return 'obst';
-  return 'laub'; // inkl. Ginkgo
+  const a = String(art || '').trim();
+  if (RULES.nadel.has(genusOf(a).toLowerCase())) return 'nadel';
+  if (RULES.essbar.some(re => re.test(a))) return 'obst'; // nur Bäume mit essbaren Früchten
+  return 'laub'; // inkl. Ginkgo und Zierobst
 }
+const accessible = p => !RULES.closed.has(p.GEBIETSGRUPPE);
+const groupLabel = g => String(g || '').replace(/^MA \d+ - /, '');
 const EMOJI = { laub:'🌳', nadel:'🌲', obst:'🍎' };
 const KAT_NAME = { laub:'Laubbaum', nadel:'Nadelbaum', obst:'Obstbaum' };
 const genusOf = art => (String(art || '').trim().split(/\s+/)[0] || 'unbekannt');
@@ -216,7 +232,7 @@ let me = null, meMarker = null, accCircle = null, selected = null;
 function treeKey(p) { return `${p.BEZIRK}|${p.OBJEKT_STRASSE}|${p.BAUMNUMMER}`; }
 
 function iconFor(t) {
-  return L.divIcon({ className: 'tree-ic', html: EMOJI[category(t.props.GATTUNG_ART)], iconSize: [30, 30] });
+  return L.divIcon({ className: 'tree-ic' + (accessible(t.props) ? '' : ' closed'), html: EMOJI[category(t.props.GATTUNG_ART)], iconSize: [30, 30] });
 }
 const HEART = c => `<svg viewBox="0 0 32 32" width="30" height="30"><path d="M16 28C7 21 2 16 2 10.5 2 6.4 5.2 3.5 9 3.5c2.8 0 5.2 1.6 7 4 1.8-2.4 4.2-4 7-4 3.8 0 7 2.9 7 7 0 5.5-5 10.5-14 17.5z" fill="${c}" stroke="#fff" stroke-width="2"/></svg>`;
 const CORE = `<svg viewBox="0 0 32 32" width="30" height="30"><path d="M16 5c0-2 1-3 3-3.5" stroke="#6b4a2b" stroke-width="2" fill="none"/><path d="M19 4.5c2-2 4.5-1.5 5.5-.5-1.5 1.5-3.5 2-5.5.5z" fill="#4caf50"/><path d="M7 8c2-3 6-3.5 9-3.5S23 5 25 8c-3 1-4.5 3.5-4.5 8s1.5 7 4.5 8c-2 3-6 4-9 4s-7-1-9-4c3-1 4.5-3.5 4.5-8S10 9 7 8z" fill="#f6ecc4" stroke="#fff" stroke-width="1.5"/><path d="M7 8c2-3 6-3.5 9-3.5S23 5 25 8c-3 .8-6 1.2-9 1.2S10 8.8 7 8z" fill="#d93a2b"/><path d="M7 24c3-.8 6-1.2 9-1.2s6 .4 9 1.2c-2 3-6 4-9 4s-7-1-9-4z" fill="#d93a2b"/><ellipse cx="14" cy="16" rx="1.2" ry="2" fill="#5b3a1e"/><ellipse cx="18" cy="16" rx="1.2" ry="2" fill="#5b3a1e"/></svg>`;
@@ -247,7 +263,7 @@ function refreshMarkers() {
   }
   // offene Bäume
   for (const t of trees.values()) {
-    const show = !state.visits[t.key];
+    const show = !state.visits[t.key] && (mode !== 'open' || accessible(t.props)); // „Offen“ zeigt nur Spielbares
     if (show && !openLayer.hasLayer(t.marker)) openLayer.addLayer(t.marker);
     if (!show && openLayer.hasLayer(t.marker)) openLayer.removeLayer(t.marker);
   }
@@ -266,6 +282,7 @@ let loadTimer = null, loading = false;
 map.on('moveend', () => { clearTimeout(loadTimer); loadTimer = setTimeout(loadTrees, 400); });
 
 async function loadTrees() {
+  await rulesReady;
   if (mode === 'visited') return;
   if (map.getZoom() < CFG.minZoom) { showHint(wasOutside ? '' : 'Näher hineinzoomen, um Bäume zu sehen'); return; }
   showHint('');
@@ -398,7 +415,7 @@ function openTree(t) {
   const d = me ? Math.round(dist(me.latlng, t.latlng)) : null;
   let html = `<button class="close" onclick="closeSheet()">×</button>
     <h2>${EMOJI[kat]} ${esc(p.GATTUNG_ART || 'Unbekannte Art')}</h2>
-    <div class="meta">${KAT_NAME[kat]} · ${esc(p.OBJEKT_STRASSE)} · ${esc(p.BEZIRK)}. Bezirk</div>
+    <div class="meta">${kat === 'obst' ? 'Obstbaum mit essbaren Früchten' : KAT_NAME[kat]} · ${esc(p.OBJEKT_STRASSE)} · ${esc(p.BEZIRK)}. Bezirk${p.GEBIETSGRUPPE ? ' · ' + esc(groupLabel(p.GEBIETSGRUPPE)) : ''}</div>
     <div class="info"><div class="grid">
       <b>Wikipedia</b><span><a id="wikiLink" href="${wikiSearchUrl(p.GATTUNG_ART)}" target="_blank" rel="noopener">${esc(speciesOf(p.GATTUNG_ART) || genusOf(p.GATTUNG_ART))}</a></span>
       <b>Baumnummer</b><span>${esc(p.BAUMNUMMER)}</span>
@@ -416,6 +433,8 @@ function openTree(t) {
       <div id="photoList">${(v.photos || []).length ? '' : '<div class="small" style="margin-top:8px">Noch keine Fotos.</div>'}</div>
       <button class="btn ghost" disabled>✉️ Nachricht für den nächsten Besucher (kommt mit dem Server)</button>`;
     renderPhotoList(v);
+  } else if (!accessible(p)) {
+    html += `<div class="warn">🔒 Nicht öffentlich zugänglich (${esc(groupLabel(p.GEBIETSGRUPPE))}) – dieser Baum ist vom Spiel ausgenommen.</div>`;
   } else {
     const ok = inRange(t);
     html += `<div class="warn${ok ? ' hidden' : ''}" id="warnRange">Geh näher hin (max. ${CFG.radius} m), um den Baum zu scannen.</div>`;
@@ -839,6 +858,8 @@ function totals() {
 function renderPoints() { $('pts').textContent = totals().all + ' P'; }
 
 // ---------- Statistik ----------
+const num = n => Number(n).toLocaleString('de-AT');
+function pct(a, b) { if (!a) return '0 %'; const p = 100 * a / b; return (p < 0.01 ? '< 0,01' : p.toLocaleString('de-AT', { maximumFractionDigits: p < 1 ? 2 : 1 })) + ' %'; }
 $('btnStats').onclick = () => {
   const p = $('stats');
   if (!p.classList.contains('hidden')) return p.classList.add('hidden');
@@ -847,7 +868,8 @@ $('btnStats').onclick = () => {
     const g = {}; v.forEach(x => (g[x[field]] = g[x[field]] || []).push(x));
     const list = Object.entries(g).sort((a, b) => b[1].length - a[1].length);
     if (!list.length) return '<div class="small">noch nichts</div>';
-    return list.map(([k, xs]) => `<details class="grp"><summary><span>${esc(label(k))}</span><span>${xs.length}</span></summary>
+    const pool = STATS ? STATS[field === 'bezirk' ? 'bezirke' : 'gattungen'] : null;
+    return list.map(([k, xs]) => `<details class="grp"><summary><span>${esc(label(k))}</span><span>${xs.length}${pool && pool[k] ? ' / ' + num(pool[k]) : ''}</span></summary>
       <div class="vlist">${xs.sort((a, b) => b.ts.localeCompare(a.ts)).map(x => `<button onclick="jumpTo('${esc(x.key)}')">${EMOJI[x.kat || 'laub']} ${esc(x.strasse)}, ${esc(x.bezirk)}. Bezirk<span class="small">${esc(x.art)} · Nr. ${esc(x.nummer)} · ${fmtDate(x.ts)}</span></button>`).join('')}</div>
       <button class="btn sec" onclick="showSubset('${field}', '${esc(k)}', '${esc(label(k))}')">🗺️ Nur diese ${xs.length} auf der Karte zeigen</button></details>`).join('');
   };
@@ -855,10 +877,13 @@ $('btnStats').onclick = () => {
     <h2>Deine Statistik</h2>
     <div class="big">${tt.all} Punkte</div>
     <div class="small">${tt.pend ? `davon ${tt.pend} vorläufig (Meldungen werden ${CFG.reportWorkdays} Werktage geprüft)` : ''}</div>
-    <p>${tt.count} Bäume besucht · ${state.districts.length} von 23 Bezirken</p>
+    <p>${tt.count} ${tt.count === 1 ? 'Baum' : 'Bäume'} besucht · ${state.districts.length} von 23 Bezirken</p>
+    ${STATS ? `<div class="ok">Wien hat <b>${num(STATS.zugaenglich)}</b> öffentlich zugängliche Bäume – du hast <b>${pct(tt.count, STATS.zugaenglich)}</b> davon besucht.<br>
+      <span class="small">🌳 ${num(STATS.kategorien.laub || 0)} Laubbäume · 🌲 ${num(STATS.kategorien.nadel || 0)} Nadelbäume · 🍎 ${num(STATS.kategorien.obst || 0)} Obstbäume<br>
+      ${num(STATS.gesamt - STATS.zugaenglich)} weitere stehen auf Schul-, Kindergarten- oder Betriebsgelände und zählen nicht. Datenstand ${fmtDate(STATS.stand)}.</span></div>` : ''}
     <h3>Bezirke</h3>${groups('bezirk', k => k + '. Bezirk')}
     <h3>Gattungen</h3>${groups('gattung', k => k)}
-    <div class="small">Vergleich mit der Gesamtzahl in Wien und die Rangliste kommen mit dem Server.</div>
+    <div class="small">Zahlen rechts: deine Bäume / zugängliche Bäume in Wien. Die Rangliste kommt mit dem Server.</div>
     <h3>Sicherung</h3>
     <button class="btn sec" onclick="exportData()">Besuche exportieren (JSON)</button>
     <button class="btn sec" onclick="$('importFile').click()">Besuche importieren</button>
