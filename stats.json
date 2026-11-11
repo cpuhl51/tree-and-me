@@ -1,8 +1,8 @@
 {
- "stand": "2026-11-10",
+ "stand": "2026-11-11",
  "quelle": "Stadt Wien – data.wien.gv.at (CC BY 4.0)",
- "gesamt": 233403,
- "zugaenglich": 201622,
+ "gesamt": 233388,
+ "zugaenglich": 201614,
  "bezirke": {
   "1": 4448,
   "2": 20539,
@@ -15,7 +15,7 @@
   "9": 3095,
   "10": 18301,
   "11": 9319,
-  "12": 7868,
+  "12": 7869,
   "13": 10515,
   "14": 8134,
   "15": 5206,
@@ -24,14 +24,14 @@
   "18": 8412,
   "19": 12285,
   "20": 7279,
-  "21": 19216,
+  "21": 19207,
   "22": 27874,
   "23": 14430,
   "": 515
  },
  "gattungen": {
-  "Acer": 43815,
-  "Tilia": 24150,
+  "Acer": 43814,
+  "Tilia": 24148,
   "Fraxinus": 16055,
   "Aesculus": 13594,
   "Celtis": 10447,
@@ -46,14 +46,14 @@
   "Pyrus": 4963,
   "Sophora": 4038,
   "Quercus": 3840,
-  "Jungbaum": 3266,
+  "Jungbaum": 3260,
   "Corylus": 2699,
   "Koelreuteria": 2105,
   "Juglans": 1689,
   "Betula": 1552,
   "Ginkgo": 1318,
   "Taxus": 1265,
-  "Ailanthus": 1154,
+  "Ailanthus": 1155,
   "Malus": 1080,
   "Picea": 967,
   "Catalpa": 733,
@@ -127,10 +127,10 @@
   "Phellodendron": 4,
   "Araucaria": 3,
   "unbekannt": 3,
+  "Clerodendrum": 2,
   "Cephalotaxus": 2,
   "Thujopsis": 2,
   "Zanthoxylum": 2,
-  "Clerodendrum": 2,
   "Baumgruppe": 1,
   "Styrax": 1,
   "Nothofagus": 1,
@@ -138,8 +138,8 @@
   "Sassafras": 1
  },
  "kategorien": {
-  "laub": 179995,
-  "obst": 10296,
-  "nadel": 11331
+  "laub": 179987,
+  "nadel": 11331,
+  "obst": 10296
  }
 }
