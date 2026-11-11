@@ -2,19 +2,86 @@
     android:id="@+id/root" android:layout_width="match_parent" android:layout_height="match_parent"
     android:orientation="vertical" android:background="@drawable/widget_bg" android:padding="4dp">
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal"
-        android:paddingStart="8dp" android:paddingEnd="8dp" android:paddingTop="2dp" android:paddingBottom="4dp">
+        android:gravity="center_vertical" android:paddingStart="8dp" android:paddingEnd="4dp" android:paddingBottom="4dp">
         <TextView android:id="@+id/title" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
             android:text="Tree and me" android:textColor="#FFFFFFFF" android:textSize="14sp" android:textStyle="bold" android:maxLines="1" />
-        <TextView android:id="@+id/open" android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="App öffnen ›" android:textColor="#FFE6F1E7" android:textSize="13sp" />
+        <TextView android:id="@+id/zoomOut" android:layout_width="34dp" android:layout_height="34dp" android:gravity="center"
+            android:text="−" android:textColor="#FF2F6B3A" android:textSize="18sp" android:textStyle="bold" android:background="@drawable/btn_bg" />
+        <View android:layout_width="6dp" android:layout_height="1dp" />
+        <TextView android:id="@+id/zoomIn" android:layout_width="34dp" android:layout_height="34dp" android:gravity="center"
+            android:text="+" android:textColor="#FF2F6B3A" android:textSize="18sp" android:textStyle="bold" android:background="@drawable/btn_bg" />
+        <View android:layout_width="6dp" android:layout_height="1dp" />
+        <TextView android:id="@+id/refresh" android:layout_width="34dp" android:layout_height="34dp" android:gravity="center"
+            android:text="⟳" android:textColor="#FF2F6B3A" android:textSize="18sp" android:textStyle="bold" android:background="@drawable/btn_bg" />
+        <View android:layout_width="6dp" android:layout_height="1dp" />
+        <TextView android:id="@+id/open" android:layout_width="34dp" android:layout_height="34dp" android:gravity="center"
+            android:text="›" android:textColor="#FF2F6B3A" android:textSize="18sp" android:textStyle="bold" android:background="@drawable/btn_bg" />
     </LinearLayout>
     <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
         <ImageView android:id="@+id/map" android:layout_width="match_parent" android:layout_height="match_parent"
-            android:scaleType="centerCrop" android:background="#FFE6F1E7" android:contentDescription="Karte mit Bäumen" />
+            android:scaleType="fitXY" android:background="#FFE6F1E7" android:contentDescription="Karte mit Bäumen" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal">
+            <TextView android:id="@+id/g0" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g1" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g2" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g3" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g4" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g5" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal">
+            <TextView android:id="@+id/g6" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g7" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g8" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g9" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g10" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g11" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal">
+            <TextView android:id="@+id/g12" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g13" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g14" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g15" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g16" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g17" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal">
+            <TextView android:id="@+id/g18" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g19" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g20" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g21" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g22" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g23" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal">
+            <TextView android:id="@+id/g24" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g25" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g26" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g27" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g28" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g29" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal">
+            <TextView android:id="@+id/g30" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g31" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g32" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g33" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g34" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+            <TextView android:id="@+id/g35" android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent" />
+        </LinearLayout>
+        </LinearLayout>
+        <TextView android:id="@+id/panN" android:layout_width="44dp" android:layout_height="28dp" android:layout_gravity="top|center_horizontal"
+            android:gravity="center" android:text="▲" android:textColor="#FF2F6B3A" android:background="@drawable/btn_bg" />
+        <TextView android:id="@+id/panS" android:layout_width="44dp" android:layout_height="28dp" android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="30dp" android:gravity="center" android:text="▼" android:textColor="#FF2F6B3A" android:background="@drawable/btn_bg" />
+        <TextView android:id="@+id/panW" android:layout_width="28dp" android:layout_height="44dp" android:layout_gravity="start|center_vertical"
+            android:gravity="center" android:text="◀" android:textColor="#FF2F6B3A" android:background="@drawable/btn_bg" />
+        <TextView android:id="@+id/panE" android:layout_width="28dp" android:layout_height="44dp" android:layout_gravity="end|center_vertical"
+            android:gravity="center" android:text="▶" android:textColor="#FF2F6B3A" android:background="@drawable/btn_bg" />
         <TextView android:id="@+id/status" android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="6dp"
+            android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="4dp"
             android:background="#CC1D241E" android:textColor="#FFFFFFFF" android:textSize="12sp"
-            android:paddingStart="10dp" android:paddingEnd="10dp" android:paddingTop="4dp" android:paddingBottom="4dp"
-            android:text="Antippen zum Aktualisieren" />
+            android:paddingStart="10dp" android:paddingEnd="10dp" android:paddingTop="3dp" android:paddingBottom="3dp"
+            android:text="⟳ tippen zum Laden" />
     </FrameLayout>
 </LinearLayout>

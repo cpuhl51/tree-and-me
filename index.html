@@ -305,6 +305,19 @@ document.querySelectorAll('#filter button').forEach(b => b.onclick = () => {
 let loadTimer = null, loading = false;
 map.on('moveend', () => { clearTimeout(loadTimer); loadTimer = setTimeout(loadTrees, 400); });
 
+// Der Geodienst der Stadt Wien antwortet gelegentlich mit HTTP 500 – dann bis zu 3-mal nachfragen
+async function fetchRetry(url, tries = 3) {
+  for (let i = 1; ; i++) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.json();
+    } catch (e) {
+      if (i >= tries) throw new Error('Baumdaten der Stadt Wien gerade nicht erreichbar (' + e.message + ')');
+      await new Promise(res => setTimeout(res, 800 * i));
+    }
+  }
+}
 async function loadTrees() {
   await rulesReady;
   if (mode === 'visited') return;
@@ -315,9 +328,7 @@ async function loadTrees() {
   const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(v => v.toFixed(6)).join(',');
   const url = `${CFG.wfs}?service=WFS&request=GetFeature&version=1.0.0&typeName=ogdwien:BAUMKATOGD&srsName=EPSG:4326&outputFormat=json&maxFeatures=${CFG.maxFeatures}&bbox=${bbox},EPSG:4326`;
   try {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const gj = await r.json();
+    const gj = await fetchRetry(url);
     for (const f of gj.features || []) {
       const p = f.properties || {}; const c = f.geometry && f.geometry.coordinates;
       if (!c) continue;
@@ -328,6 +339,10 @@ async function loadTrees() {
       trees.set(key, t);
     }
     refreshMarkers();
+    if (deepLink && deepLink.baum) {
+      const hit = [...trees.values()].find(t => String(t.props.BAUM_ID) === deepLink.baum);
+      if (hit) { deepLink.baum = null; openTree(hit); }
+    }
     await loadOverrides(bbox);
     refreshMarkers(); trees.forEach(t => t.marker && t.marker.setIcon(iconFor(t)));
     if ((gj.features || []).length >= CFG.maxFeatures) showHint('Sehr viele Bäume – näher zoomen für alle');
@@ -417,7 +432,15 @@ function setMe(latlng, acc) {
 // Start: sofort zur zuletzt bekannten Position, dann zur schnellen Netzwerk-Ortung, dann zum genauen GPS
 let firstFix = true, userMoved = false;
 map.on('dragstart', () => { userMoved = true; });
-try {
+// Öffnen per Link, z. B. aus dem Android-Widget: ?lat=48.24&lon=16.48&z=19&baum=12345
+const deepLink = (() => {
+  const q = new URLSearchParams(location.search), lat = +q.get('lat'), lon = +q.get('lon');
+  if (!lat || !lon) return null;
+  history.replaceState(null, '', location.pathname);
+  return { ll: L.latLng(lat, lon), z: Math.min(19, Math.max(15, +q.get('z') || 19)), baum: q.get('baum') };
+})();
+if (deepLink) { userMoved = true; map.setView(deepLink.ll, deepLink.z); }
+else try {
   const last = JSON.parse(localStorage.getItem('tam_lastpos'));
   if (last && inWien(L.latLng(last[0], last[1]))) map.setView(last, 17);
 } catch (e) {}

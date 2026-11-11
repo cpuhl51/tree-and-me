@@ -1,6 +1,6 @@
 // Service Worker: macht die App installierbar und startet sie auch bei schlechtem Netz.
 // App-Dateien: zuerst Netz (immer aktuell), bei Ausfall aus dem Zwischenspeicher.
-const CACHE = 'tam-v6';
+const CACHE = 'tam-v7';
 const SHELL = ['./', './index.html', './datenschutz.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './logo-96.png', './favicon-64.png', './regeln.json', './stats.json'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener('activate', e => {
