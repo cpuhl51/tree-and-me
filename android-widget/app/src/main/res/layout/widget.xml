@@ -1,0 +1,20 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@drawable/widget_bg" android:padding="4dp">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal"
+        android:paddingStart="8dp" android:paddingEnd="8dp" android:paddingTop="2dp" android:paddingBottom="4dp">
+        <TextView android:id="@+id/title" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:text="Tree and me" android:textColor="#FFFFFFFF" android:textSize="14sp" android:textStyle="bold" android:maxLines="1" />
+        <TextView android:id="@+id/open" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="App öffnen ›" android:textColor="#FFE6F1E7" android:textSize="13sp" />
+    </LinearLayout>
+    <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <ImageView android:id="@+id/map" android:layout_width="match_parent" android:layout_height="match_parent"
+            android:scaleType="centerCrop" android:background="#FFE6F1E7" android:contentDescription="Karte mit Bäumen" />
+        <TextView android:id="@+id/status" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="6dp"
+            android:background="#CC1D241E" android:textColor="#FFFFFFFF" android:textSize="12sp"
+            android:paddingStart="10dp" android:paddingEnd="10dp" android:paddingTop="4dp" android:paddingBottom="4dp"
+            android:text="Antippen zum Aktualisieren" />
+    </FrameLayout>
+</LinearLayout>
